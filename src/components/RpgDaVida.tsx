@@ -4,9 +4,10 @@ import React, { useState, useEffect, useRef } from "react";
 import { getSupabase } from "@/lib/supabaseClient";
 import { loadSave, persistSave } from "@/lib/save";
 import {
-  Sword, Store, Cat, Heart, BarChart3, Crown, Flame,
+  Sword, Store, Heart, BarChart3, Crown, Flame,
   Plus, Minus, Trash2, X, Target, Zap, Volume2, VolumeX, Coins, Check,
   Trophy, Skull, Droplet, Pill, Sun, Moon, Utensils, LogOut, Pencil,
+  Gem, PawPrint, Smile,
 } from "lucide-react";
 
 /* ============================================================
@@ -97,9 +98,13 @@ const ACHIEVEMENTS = [
 
 /* ---------- Chefes ---------- */
 const BOSSES = [
-  { id: "boss_week", name: "Chefe da Semana", emoji: "🐉", desc: "Remédios completos 7 dias seguidos", goal: 7, metric: "medStreak", rewardXp: 500, rewardGold: 200, loot: "Poção da Constância" },
-  { id: "boss_month", name: "Chefe do Mês", emoji: "👹", desc: "Conclua 100 tarefas no total", goal: 100, metric: "tasksCompleted", rewardXp: 1000, rewardGold: 1000, loot: "Coroa Lendária 👑" },
+  { id: "boss_week", name: "Chefe da Semana", emoji: "🐉", desc: "Remédios completos 7 dias seguidos", goal: 7, metric: "medStreak", rewardXp: 500, rewardGold: 200, rewardGems: 30, loot: "Poção da Constância" },
+  { id: "boss_month", name: "Chefe do Mês", emoji: "👹", desc: "Conclua 100 tarefas no total", goal: 100, metric: "tasksCompleted", rewardXp: 1000, rewardGold: 1000, rewardGems: 100, loot: "Coroa Lendária 👑" },
 ];
+
+/* ---------- Gemas (moeda de cosméticos) ---------- */
+const GEMS_PER_LEVEL = 5;     // ao subir de nível
+const GEMS_DAY_BONUS = 10;    // ao fechar todas as missões do dia
 
 /* ---------- Mapa da jornada ---------- */
 const JOURNEY = [
@@ -110,18 +115,50 @@ const JOURNEY = [
   { name: "Lenda Doméstica", xp: 4000, emoji: "🏰" },
 ];
 
-/* ---------- Evolução da Mona ---------- */
+/* ---------- Pet (genérico) ---------- */
 const PET_STAGES = [
-  { name: "Gatinha Sonolenta", xp: 0, emoji: "😴" },
-  { name: "Exploradora", xp: 200, emoji: "🐱" },
-  { name: "Caçadora", xp: 600, emoji: "😼" },
-  { name: "Rainha da Casa", xp: 1500, emoji: "👑" },
-  { name: "Mona Lendária", xp: 3500, emoji: "🌟" },
+  { name: "Filhote Sonolento", xp: 0 },
+  { name: "Explorador", xp: 200 },
+  { name: "Caçador", xp: 600 },
+  { name: "Realeza da Casa", xp: 1500 },
+  { name: "Companheiro Lendário", xp: 3500 },
 ];
+const PET_SPECIES = [
+  { id: "gato", label: "Gato", emoji: "🐱" },
+  { id: "cachorro", label: "Cão", emoji: "🐶" },
+  { id: "coelho", label: "Coelho", emoji: "🐰" },
+  { id: "urso", label: "Urso", emoji: "🐻" },
+];
+const PET_COLORS = ["#ffffff", "#f4c542", "#e2a16f", "#b97a56", "#8a8f99", "#3a3a44", "#f6a5c0", "#9ad0c2"];
+const DEFAULT_PET = { name: "Mona", species: "gato", color: "#ffffff" };
+
+/* ---------- Avatar (camadas + desbloqueio por nível) ---------- */
+const SKIN_TONES = ["#f6d2b3", "#eebd96", "#d39b6e", "#a9714a", "#7a4f30", "#5a3825"];
+const HAIR_COLORS = ["#2b2118", "#5a3b22", "#a8662d", "#d6a64a", "#bcbcbc", "#e7e1d6", "#c0392b", "#3a6ea5"];
+const HAIRS = [
+  { id: "curto", label: "Curto", lvl: 1 },
+  { id: "longo", label: "Longo", lvl: 1 },
+  { id: "careca", label: "Careca", lvl: 1 },
+  { id: "cacheado", label: "Cacheado", lvl: 3 },
+  { id: "moicano", label: "Moicano", lvl: 6 },
+];
+const OUTFITS = [
+  { id: "camiseta", label: "Camiseta", lvl: 1, color: "#5aa9e6" },
+  { id: "tunica", label: "Túnica", lvl: 2, color: "#7ec850" },
+  { id: "armadura", label: "Armadura", lvl: 4, color: "#9aa3b2" },
+  { id: "capa", label: "Capa heroica", lvl: 8, color: "#9b59b6" },
+];
+const ACCESSORIES = [
+  { id: "nenhum", label: "Nenhum", lvl: 1 },
+  { id: "oculos", label: "Óculos", lvl: 2 },
+  { id: "chapeu", label: "Chapéu", lvl: 5 },
+  { id: "coroa", label: "Coroa", lvl: 10 },
+];
+const DEFAULT_AVATAR = { skin: "#eebd96", hair: "curto", hairColor: "#2b2118", outfit: "camiseta", accessory: "nenhum" };
 
 /* ---------- Mensagens divertidas ao concluir ---------- */
 const FUN_MSGS = {
-  pet: ["A Mona está orgulhosa de você 🐾", "Ronrom de aprovação ativado", "A Rainha agradece a corte"],
+  pet: ["Seu bichinho está orgulhoso 🐾", "Carinho de aprovação ativado", "A casa agradece o cuidado"],
   casa: ["Você derrotou o Monstro da Pia Aberta", "Geladeira protegida com sucesso", "O Caos recuou um passo"],
   pessoal: ["Herói preparado para a jornada", "Mente e corpo em sincronia", "Mais um passo na disciplina"],
   saude: ["Glicemia sob controle, herói 💙", "Seu corpo agradece o cuidado", "Mais um passo pela sua saúde"],
@@ -170,6 +207,10 @@ const DEFAULT_DATA = {
   tasksCompleted: 0,
   catCounts: { pet: 0, casa: 0, pessoal: 0, saude: 0 },
   taskCounts: {},
+  gems: 0,
+  pet: { ...DEFAULT_PET },
+  avatar: { ...DEFAULT_AVATAR },
+  dayBonusDate: null,
   water: { date: dayKey(), count: 0 },          // count = copos de 250 ml
   waterScored: { date: dayKey(), cups: 0 },      // anti-farm da água
   waterGoalL: WATER_GOAL_L_DEFAULT,
@@ -196,6 +237,9 @@ function freshData() {
     tasks: BASE_TASKS.map((t) => ({ ...t })),
     meds: [],
     meals: MEAL_DEFAULTS.map((m) => ({ ...m })),
+    pet: { ...DEFAULT_PET },
+    avatar: { ...DEFAULT_AVATAR },
+    gems: 0,
   };
 }
 
@@ -268,6 +312,9 @@ export default function RpgDaVida({ userId, onSignOut }) {
         if (!d.waterScored || d.waterScored.date !== dayKey()) d.waterScored = { date: dayKey(), cups: 0 };
         if (typeof d.waterGoalL !== "number") d.waterGoalL = WATER_GOAL_L_DEFAULT;
         if (!d.water || typeof d.water.count !== "number") d.water = { date: dayKey(), count: 0 };
+        if (typeof d.gems !== "number") d.gems = 0;
+        if (!d.pet || typeof d.pet !== "object") d.pet = { ...DEFAULT_PET };
+        if (!d.avatar || typeof d.avatar !== "object") d.avatar = { ...DEFAULT_AVATAR };
       }
       delete d.customTasks; delete d.customMeds;
 
@@ -379,6 +426,7 @@ export default function RpgDaVida({ userId, onSignOut }) {
 
           const newLevel = levelFromXp(d.xpTotal).level;
           if (newLevel > prevLevel) {
+            d.gems = (d.gems || 0) + GEMS_PER_LEVEL * (newLevel - prevLevel);
             if (d.soundOn) sound.levelUp();
             setLevelUpBanner(newLevel);
             setTimeout(() => setLevelUpBanner(null), 2600);
@@ -397,10 +445,19 @@ export default function RpgDaVida({ userId, onSignOut }) {
           const bdef = checkBosses(d);
           if (bdef) {
             d.xpTotal += bdef.rewardXp; d.gold += bdef.rewardGold;
+            d.gems = (d.gems || 0) + (bdef.rewardGems || 0);
             d.bossesDefeated = [...d.bossesDefeated, bdef.id];
             if (d.soundOn) sound.boss();
             setBossBanner(bdef);
             setTimeout(() => setBossBanner(null), 3200);
+          }
+
+          // bônus por fechar todas as missões do dia (1x/dia)
+          const todays = (d.tasks || []).filter(isActiveToday);
+          if (todays.length && todays.every((t) => d.doneToday.includes(t.id)) && d.dayBonusDate !== today) {
+            d.gems = (d.gems || 0) + GEMS_DAY_BONUS;
+            d.dayBonusDate = today;
+            setTimeout(() => showToast(`Dia completo! +${GEMS_DAY_BONUS} 💎`), 1200);
           }
         }
         // se já pontuou hoje, só marca (sem XP, sem efeitos)
@@ -440,10 +497,17 @@ export default function RpgDaVida({ userId, onSignOut }) {
         const scored = d.waterScored && d.waterScored.date === today ? d.waterScored.cups : 0;
         // só pontua "degraus" novos, nunca repete, e nunca passa da meta
         if (next <= goalCups && next > scored) {
+          const prevLevel = levelFromXp(d.xpTotal).level;
           d.xpTotal += WATER_XP; d.gold += WATER_XP;
           d.waterScored = { date: today, cups: next };
           markActive(d);
-          if (d.soundOn) sound.ding();
+          const newLevel = levelFromXp(d.xpTotal).level;
+          if (newLevel > prevLevel) {
+            d.gems = (d.gems || 0) + GEMS_PER_LEVEL * (newLevel - prevLevel);
+            if (d.soundOn) sound.levelUp();
+            setLevelUpBanner(newLevel);
+            setTimeout(() => setLevelUpBanner(null), 2600);
+          } else if (d.soundOn) sound.ding();
           spawnPop(`+${WATER_XP} XP`, CATS.saude.color); spawnParticles(CATS.saude.color);
         }
       }
@@ -497,7 +561,7 @@ export default function RpgDaVida({ userId, onSignOut }) {
             <div className="text-5xl" style={{ animation: "wiggle 1s ease-in-out infinite" }}>{bossBanner.emoji}</div>
             <div style={{ color: C.ember }} className="font-serif text-2xl font-black mt-2">CHEFE DERROTADO!</div>
             <div style={{ color: C.parch }} className="font-serif text-lg mt-1">{bossBanner.name}</div>
-            <div style={{ color: C.gold }} className="text-sm mt-2 font-bold">+{bossBanner.rewardXp} XP · +{bossBanner.rewardGold} 🪙</div>
+            <div style={{ color: C.gold }} className="text-sm mt-2 font-bold">+{bossBanner.rewardXp} XP · +{bossBanner.rewardGold} 🪙 · +{bossBanner.rewardGems} 💎</div>
             <div style={{ color: C.parch }} className="text-sm mt-1">Loot: {bossBanner.loot}</div>
           </div>
         </div>
@@ -523,7 +587,8 @@ export default function RpgDaVida({ userId, onSignOut }) {
             visibleTasks, quickOnly, setQuickOnly, toggleTask, setFocusMode, pending, allTasks: todayTasks, update }} />
         )}
         {tab === "loja" && <Loja data={data} buyReward={buyReward} update={update} />}
-        {tab === "mona" && <Mona data={data} petStage={petStage} petSad={petSad} />}
+        {tab === "pet" && <Pet data={data} petStage={petStage} petSad={petSad} update={update} />}
+        {tab === "avatar" && <Avatar data={data} level={level} journeyStage={journeyStage} update={update} />}
         {tab === "saude" && <Saude data={data} addWater={addWater} toggleTask={toggleTask} update={update}
           medDone={(() => { const ids = (data.meds || []).map((m) => m.id); return ids.length > 0 && ids.every((id) => data.doneToday.includes(id)); })()} />}
         {tab === "stats" && <Stats data={data} level={level} playerClass={playerClass} sound={sound} update={update} onSignOut={onSignOut} />}
@@ -535,8 +600,9 @@ export default function RpgDaVida({ userId, onSignOut }) {
           className="flex items-center justify-between rounded-2xl px-2 py-2">
           {[
             { k: "aventura", icon: Sword, label: "Missões" },
+            { k: "pet", icon: PawPrint, label: "Pet" },
+            { k: "avatar", icon: Smile, label: "Avatar" },
             { k: "loja", icon: Store, label: "Loja" },
-            { k: "mona", icon: Cat, label: "Mona" },
             { k: "saude", icon: Heart, label: "Saúde" },
             { k: "stats", icon: BarChart3, label: "Status" },
           ].map(({ k, icon: Icon, label }) => {
@@ -545,8 +611,8 @@ export default function RpgDaVida({ userId, onSignOut }) {
               <button key={k} onClick={() => setTab(k)}
                 style={{ background: on ? C.gold : "transparent", color: on ? C.ink : C.inkSoft }}
                 className="flex flex-1 flex-col items-center gap-0.5 rounded-xl py-1.5 transition-all active:scale-95">
-                <Icon size={20} strokeWidth={2.4} />
-                <span className="text-[10px] font-bold">{label}</span>
+                <Icon size={18} strokeWidth={2.4} />
+                <span className="text-[9px] font-bold">{label}</span>
               </button>
             );
           })}
@@ -618,9 +684,9 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
         </div>
         {/* recursos */}
         <div className="mt-3 flex items-center justify-between text-sm font-bold" style={{ color: C.ink }}>
-          <span className="flex items-center gap-1"><Coins size={16} style={{ color: C.goldDeep }} /> {data.gold} ouro</span>
+          <span className="flex items-center gap-1"><Coins size={16} style={{ color: C.goldDeep }} /> {data.gold}</span>
+          <span className="flex items-center gap-1"><Gem size={15} style={{ color: "#9b59b6" }} /> {data.gems || 0}</span>
           <span className="flex items-center gap-1"><Flame size={16} style={{ color: C.ember }} /> {data.currentStreak} dias</span>
-          <span style={{ color: C.inkSoft }} className="text-xs">{journeyStage.emoji} {journeyStage.name}</span>
         </div>
       </Panel>
 
@@ -920,8 +986,32 @@ function AddRewardForm({ onAdd, onCancel }) {
   );
 }
 
-/* ---------- MONA: gata branca de olhos azuis (SVG) ---------- */
-function MonaCat({ size = 120, sad = false, stageIndex = 0, idle = true }) {
+/* ---------- PET (genérico: espécie + cor) ---------- */
+function petEars(species, color) {
+  if (species === "cachorro") return (<>
+    <path d="M22 38 Q9 41 14 64 Q24 66 31 50 Z" fill={color} stroke="#00000022" strokeWidth="1" />
+    <path d="M78 38 Q91 41 86 64 Q76 66 69 50 Z" fill={color} stroke="#00000022" strokeWidth="1" />
+  </>);
+  if (species === "coelho") return (<>
+    <ellipse cx="37" cy="20" rx="7" ry="20" fill={color} stroke="#00000022" strokeWidth="1" />
+    <ellipse cx="63" cy="20" rx="7" ry="20" fill={color} stroke="#00000022" strokeWidth="1" />
+    <ellipse cx="37" cy="22" rx="3" ry="13" fill="#f7c6d9" />
+    <ellipse cx="63" cy="22" rx="3" ry="13" fill="#f7c6d9" />
+  </>);
+  if (species === "urso") return (<>
+    <circle cx="26" cy="30" r="11" fill={color} stroke="#00000022" strokeWidth="1" />
+    <circle cx="74" cy="30" r="11" fill={color} stroke="#00000022" strokeWidth="1" />
+  </>);
+  // gato
+  return (<>
+    <path d="M20 42 L26 12 L46 34 Z" fill={color} stroke="#00000022" strokeWidth="1" />
+    <path d="M80 42 L74 12 L54 34 Z" fill={color} stroke="#00000022" strokeWidth="1" />
+    <path d="M27 38 L30 21 L40 33 Z" fill="#f7c6d9" />
+    <path d="M73 38 L70 21 L60 33 Z" fill="#f7c6d9" />
+  </>);
+}
+
+function PetAvatar({ size = 120, species = "gato", color = "#ffffff", sad = false, stageIndex = 0, idle = true }) {
   const sleepy = stageIndex === 0 && !sad;
   const crown = stageIndex >= 3;
   const sparkles = stageIndex >= 4;
@@ -933,18 +1023,11 @@ function MonaCat({ size = 120, sad = false, stageIndex = 0, idle = true }) {
           d={`M${x} ${y - 4} L${x + 1.4} ${y - 1.4} L${x + 4} ${y} L${x + 1.4} ${y + 1.4} L${x} ${y + 4} L${x - 1.4} ${y + 1.4} L${x - 4} ${y} L${x - 1.4} ${y - 1.4} Z`}
           fill={C.gold} />
       ))}
-      {/* orelhas */}
-      <path d="M20 42 L26 12 L46 34 Z" fill="#fff" stroke="#e3e3ea" strokeWidth="1.5" />
-      <path d="M80 42 L74 12 L54 34 Z" fill="#fff" stroke="#e3e3ea" strokeWidth="1.5" />
-      <path d="M27 38 L30 21 L40 33 Z" fill="#f7c6d9" />
-      <path d="M73 38 L70 21 L60 33 Z" fill="#f7c6d9" />
-      {/* cabeça */}
-      <ellipse cx="50" cy="60" rx="34" ry="30" fill="#fff" stroke="#e3e3ea" strokeWidth="1.5" />
+      {petEars(species, color)}
+      <ellipse cx="50" cy="60" rx="34" ry="30" fill={color} stroke="#00000022" strokeWidth="1.5" />
       {crown && <path d="M34 30 L40 20 L46 28 L50 16 L54 28 L60 20 L66 30 Z" fill={C.gold} stroke={C.goldDeep} strokeWidth="1.2" />}
-      {/* bochechas */}
-      <ellipse cx="27" cy="67" rx="6" ry="4" fill="#fbdfe9" />
-      <ellipse cx="73" cy="67" rx="6" ry="4" fill="#fbdfe9" />
-      {/* olhos */}
+      <ellipse cx="27" cy="67" rx="6" ry="4" fill="#ff7aa820" />
+      <ellipse cx="73" cy="67" rx="6" ry="4" fill="#ff7aa820" />
       {sleepy ? (
         <>
           <path d="M30 57 Q38 63 46 57" fill="none" stroke="#3a4a66" strokeWidth="2.5" strokeLinecap="round" />
@@ -957,8 +1040,8 @@ function MonaCat({ size = 120, sad = false, stageIndex = 0, idle = true }) {
             <path d="M30 47 Q38 49 44 52" stroke="#3a4a66" strokeWidth="2" fill="none" strokeLinecap="round" />
             <path d="M70 47 Q62 49 56 52" stroke="#3a4a66" strokeWidth="2" fill="none" strokeLinecap="round" />
           </>}
-          <circle cx="38" cy="58" r="8" fill="#bfe3ff" />
-          <circle cx="62" cy="58" r="8" fill="#bfe3ff" />
+          <circle cx="38" cy="58" r="8" fill="#ffffffcc" />
+          <circle cx="62" cy="58" r="8" fill="#ffffffcc" />
           <circle cx="38" cy="58" r="6" fill="#3a8fd8" />
           <circle cx="62" cy="58" r="6" fill="#3a8fd8" />
           <circle cx="38" cy="58" r="3" fill="#16263b" />
@@ -968,39 +1051,49 @@ function MonaCat({ size = 120, sad = false, stageIndex = 0, idle = true }) {
           {sad && <path d="M35 65 Q33 71 37 73 Q41 71 39 65 Z" fill="#7ec8ff" />}
         </>
       )}
-      {/* nariz */}
       <path d="M47 67 L53 67 L50 71 Z" fill="#f08fb0" />
-      {/* boca */}
       {sad ? (
         <path d="M42 80 Q50 74 58 80" fill="none" stroke="#c9a9a9" strokeWidth="2" strokeLinecap="round" />
       ) : (
         <path d="M50 71 Q46 78 41 76 M50 71 Q54 78 59 76" fill="none" stroke="#c9a9a9" strokeWidth="2" strokeLinecap="round" />
       )}
-      {/* bigodes */}
-      <g stroke="#d3d3dc" strokeWidth="1.4" strokeLinecap="round">
-        <line x1="13" y1="61" x2="30" y2="63" /><line x1="13" y1="68" x2="30" y2="68" />
-        <line x1="87" y1="61" x2="70" y2="63" /><line x1="87" y1="68" x2="70" y2="68" />
-      </g>
+      {species === "gato" && (
+        <g stroke="#9aa0ab" strokeWidth="1.4" strokeLinecap="round">
+          <line x1="13" y1="61" x2="30" y2="63" /><line x1="13" y1="68" x2="30" y2="68" />
+          <line x1="87" y1="61" x2="70" y2="63" /><line x1="87" y1="68" x2="70" y2="68" />
+        </g>
+      )}
     </svg>
   );
 }
 
-/* ---------- MONA (pet) ---------- */
-function Mona({ data, petStage, petSad }) {
+function Pet({ data, petStage, petSad, update }) {
+  const pet = data.pet || DEFAULT_PET;
   const idx = PET_STAGES.indexOf(petStage);
   const next = PET_STAGES[idx + 1];
   const prog = next ? Math.min(100, Math.round(((data.xpTotal - petStage.xp) / (next.xp - petStage.xp)) * 100)) : 100;
+  const setPet = (patch) => update({ pet: { ...pet, ...patch } });
+  const [editingName, setEditingName] = useState(false);
+  const [nameVal, setNameVal] = useState(pet.name);
+
   return (
     <div className="space-y-4">
       <Panel style={{ background: `linear-gradient(160deg, #f0f7ff, ${C.parch2})` }} className="text-center">
-        <div className="flex justify-center"><MonaCat size={150} sad={petSad} stageIndex={idx} /></div>
-        <div style={{ color: C.ink }} className="mt-1 font-serif text-2xl font-black">Mona</div>
-        <div style={{ color: C.rose }} className="font-bold">{petStage.name}</div>
-        {petSad ? (
-          <p style={{ color: C.inkSoft }} className="mt-2 text-sm">A Mona sente sua falta. Complete uma missão para alegrá-la — sem pressa, sem culpa. 💛</p>
+        <div className="flex justify-center"><PetAvatar size={150} species={pet.species} color={pet.color} sad={petSad} stageIndex={idx} /></div>
+        {editingName ? (
+          <input autoFocus value={nameVal} onChange={(e) => setNameVal(e.target.value)}
+            onBlur={() => { setPet({ name: nameVal.trim() || "Pet" }); setEditingName(false); }}
+            onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+            style={{ color: C.ink, borderColor: C.goldDeep }}
+            className="mt-1 w-40 border-b-2 bg-transparent text-center font-serif text-2xl font-black outline-none" />
         ) : (
-          <p style={{ color: C.inkSoft }} className="mt-2 text-sm">A Mona está feliz e evolui junto com você.</p>
+          <button onClick={() => { setNameVal(pet.name); setEditingName(true); }} style={{ color: C.ink }}
+            className="mt-1 font-serif text-2xl font-black">{pet.name} ✎</button>
         )}
+        <div style={{ color: C.rose }} className="font-bold">{petStage.name}</div>
+        <p style={{ color: C.inkSoft }} className="mt-2 text-sm">
+          {petSad ? `${pet.name} sente sua falta. Uma missão hoje já alegra — sem pressa, sem culpa. 💛` : `${pet.name} está feliz e evolui junto com você.`}
+        </p>
         {next && (
           <div className="mt-4">
             <div className="mb-1 flex justify-between text-xs font-bold" style={{ color: C.ink }}>
@@ -1013,8 +1106,28 @@ function Mona({ data, petStage, petSad }) {
         )}
       </Panel>
 
+      {/* personalização */}
       <Panel>
-        <div style={{ color: C.ink }} className="mb-3 font-serif font-bold">Evolução da Mona</div>
+        <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Espécie</div>
+        <div className="mb-4 flex gap-2">
+          {PET_SPECIES.map((s) => (
+            <button key={s.id} onClick={() => setPet({ species: s.id })}
+              style={{ background: pet.species === s.id ? C.gold : "rgba(0,0,0,.06)", color: pet.species === s.id ? C.ink : C.inkSoft }}
+              className="flex-1 rounded-xl py-2 text-sm font-bold">{s.emoji}<br />{s.label}</button>
+          ))}
+        </div>
+        <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Cor</div>
+        <div className="flex flex-wrap gap-2">
+          {PET_COLORS.map((c) => (
+            <button key={c} onClick={() => setPet({ color: c })}
+              style={{ background: c, border: pet.color === c ? `3px solid ${C.goldDeep}` : "2px solid rgba(0,0,0,.15)" }}
+              className="h-9 w-9 rounded-full active:scale-90 transition" />
+          ))}
+        </div>
+      </Panel>
+
+      <Panel>
+        <div style={{ color: C.ink }} className="mb-3 font-serif font-bold">Evolução</div>
         <div className="space-y-2">
           {PET_STAGES.map((s, i) => {
             const reached = data.xpTotal >= s.xp;
@@ -1022,7 +1135,7 @@ function Mona({ data, petStage, petSad }) {
             return (
               <div key={s.name} className="flex items-center gap-3" style={{ opacity: reached ? 1 : 0.45 }}>
                 <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center">
-                  {reached ? <MonaCat size={36} stageIndex={i} idle={false} /> : <span className="text-2xl">🥚</span>}
+                  {reached ? <PetAvatar size={36} species={pet.species} color={pet.color} stageIndex={i} idle={false} /> : <span className="text-2xl">🥚</span>}
                 </div>
                 <div className="flex-1">
                   <div style={{ color: C.ink }} className="text-sm font-bold">{s.name}</div>
@@ -1031,6 +1144,118 @@ function Mona({ data, petStage, petSad }) {
                 {current && <Tag color={C.rose}>agora</Tag>}
                 {reached && !current && <Check size={16} style={{ color: C.xpDeep }} />}
               </div>
+            );
+          })}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+/* ---------- AVATAR (camadas + desbloqueio por nível) ---------- */
+function hairEl(hair, color) {
+  if (hair === "curto") return <path d="M28 44 Q30 23 50 23 Q70 23 72 44 Q66 33 50 33 Q34 33 28 44 Z" fill={color} />;
+  if (hair === "longo") return <><path d="M25 64 Q23 29 50 23 Q77 29 75 64 L69 64 Q72 36 50 34 Q28 36 31 64 Z" fill={color} /><path d="M28 44 Q34 29 50 29 Q66 29 72 44 Q66 33 50 33 Q34 33 28 44 Z" fill={color} /></>;
+  if (hair === "cacheado") return <g fill={color}>{[[34, 30], [42, 25], [50, 23], [58, 25], [66, 30], [30, 40], [70, 40]].map(([x, y], i) => <circle key={i} cx={x} cy={y} r="7" />)}</g>;
+  if (hair === "moicano") return <path d="M46 21 Q50 6 54 21 L54 40 L46 40 Z" fill={color} />;
+  return null; // careca
+}
+
+function AvatarFig({ cfg, level = 1, size = 150 }) {
+  const skin = cfg?.skin || DEFAULT_AVATAR.skin;
+  const hair = cfg?.hair || "curto";
+  const hairColor = cfg?.hairColor || "#2b2118";
+  const outfit = OUTFITS.find((o) => o.id === cfg?.outfit) || OUTFITS[0];
+  const acc = cfg?.accessory || "nenhum";
+  const happy = level >= 5;
+  const aura = level >= 10;
+  return (
+    <svg width={size} height={size * 1.2} viewBox="0 0 100 120" style={{ overflow: "visible" }}>
+      {aura && <circle cx="50" cy="46" r="42" fill="none" stroke={C.gold} strokeWidth="2" opacity="0.5" style={{ animation: "wiggle 3s ease-in-out infinite" }} />}
+      {cfg?.outfit === "capa" && <path d="M30 72 Q50 66 70 72 L80 118 Q50 112 20 118 Z" fill="#7d3ca6" />}
+      <path d="M26 118 Q26 80 50 78 Q74 80 74 118 Z" fill={outfit.color} stroke="#00000022" strokeWidth="1" />
+      {outfit.id === "armadura" && (<>
+        <line x1="50" y1="80" x2="50" y2="118" stroke="#00000022" strokeWidth="2" />
+        <path d="M40 88 Q50 94 60 88" stroke="#ffffff66" strokeWidth="2" fill="none" />
+      </>)}
+      <rect x="44" y="63" width="12" height="15" rx="4" fill={skin} />
+      <circle cx="50" cy="46" r="22" fill={skin} stroke="#00000022" strokeWidth="1" />
+      <circle cx="28" cy="48" r="4" fill={skin} /><circle cx="72" cy="48" r="4" fill={skin} />
+      {hairEl(hair, hairColor)}
+      <circle cx="42" cy="46" r="2.5" fill="#26201a" /><circle cx="58" cy="46" r="2.5" fill="#26201a" />
+      <path d={happy ? "M40 54 Q50 64 60 54" : "M43 55 Q50 60 57 55"} fill="none" stroke="#9a6a5a" strokeWidth="2" strokeLinecap="round" />
+      <circle cx="36" cy="53" r="3" fill="#ff5a5a22" /><circle cx="64" cy="53" r="3" fill="#ff5a5a22" />
+      {acc === "oculos" && <g stroke="#26201a" strokeWidth="2" fill="none"><circle cx="42" cy="46" r="6" /><circle cx="58" cy="46" r="6" /><line x1="48" y1="46" x2="52" y2="46" /></g>}
+      {acc === "chapeu" && <g><rect x="30" y="25" width="40" height="6" rx="3" fill="#5a3b22" /><rect x="38" y="12" width="24" height="16" rx="4" fill="#7a4f30" /></g>}
+      {acc === "coroa" && <path d="M34 26 L40 13 L46 23 L50 9 L54 23 L60 13 L66 26 Z" fill={C.gold} stroke={C.goldDeep} strokeWidth="1" />}
+    </svg>
+  );
+}
+
+function Avatar({ data, level, journeyStage, update }) {
+  const cfg = data.avatar || DEFAULT_AVATAR;
+  const setAv = (patch) => update({ avatar: { ...cfg, ...patch } });
+
+  return (
+    <div className="space-y-4">
+      <Panel style={{ background: `linear-gradient(160deg, #fbf2dc, ${C.parch2})` }} className="text-center">
+        <div className="flex justify-center"><AvatarFig cfg={cfg} level={level} size={160} /></div>
+        <div style={{ color: C.ink }} className="mt-1 font-serif text-2xl font-black">{data.playerName}</div>
+        <div style={{ color: C.goldDeep }} className="font-bold">Nível {level} · {journeyStage.emoji} {journeyStage.name}</div>
+        <p style={{ color: C.inkSoft }} className="mt-2 text-sm">Suba de nível para desbloquear novos visuais. Aos 5, seu herói ganha um sorrisão; aos 10, uma aura dourada. ✨</p>
+      </Panel>
+
+      <Panel>
+        <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Pele</div>
+        <div className="flex flex-wrap gap-2">
+          {SKIN_TONES.map((c) => (
+            <button key={c} onClick={() => setAv({ skin: c })} style={{ background: c, border: cfg.skin === c ? `3px solid ${C.goldDeep}` : "2px solid rgba(0,0,0,.15)" }} className="h-9 w-9 rounded-full active:scale-90 transition" />
+          ))}
+        </div>
+      </Panel>
+
+      <Panel>
+        <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Cabelo</div>
+        <div className="mb-3 flex flex-wrap gap-2">
+          {HAIRS.map((h) => {
+            const locked = h.lvl > level; const sel = cfg.hair === h.id;
+            return (
+              <button key={h.id} disabled={locked} onClick={() => setAv({ hair: h.id })}
+                style={{ background: sel ? C.gold : "rgba(0,0,0,.06)", color: sel ? C.ink : C.inkSoft, opacity: locked ? 0.5 : 1 }}
+                className="rounded-xl px-3 py-2 text-sm font-bold">{h.label}{locked && <span style={{ color: C.inkSoft }} className="text-[9px] font-bold"> 🔒 Nv {h.lvl}</span>}</button>
+            );
+          })}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {HAIR_COLORS.map((c) => (
+            <button key={c} onClick={() => setAv({ hairColor: c })} style={{ background: c, border: cfg.hairColor === c ? `3px solid ${C.goldDeep}` : "2px solid rgba(0,0,0,.15)" }} className="h-8 w-8 rounded-full" />
+          ))}
+        </div>
+      </Panel>
+
+      <Panel>
+        <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Roupa</div>
+        <div className="flex flex-wrap gap-2">
+          {OUTFITS.map((o) => {
+            const locked = o.lvl > level; const sel = cfg.outfit === o.id;
+            return (
+              <button key={o.id} disabled={locked} onClick={() => setAv({ outfit: o.id })}
+                style={{ background: sel ? C.gold : "rgba(0,0,0,.06)", color: sel ? C.ink : C.inkSoft, opacity: locked ? 0.5 : 1 }}
+                className="rounded-xl px-3 py-2 text-sm font-bold">{o.label}{locked && <span style={{ color: C.inkSoft }} className="text-[9px] font-bold"> 🔒 Nv {o.lvl}</span>}</button>
+            );
+          })}
+        </div>
+      </Panel>
+
+      <Panel>
+        <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Acessório</div>
+        <div className="flex flex-wrap gap-2">
+          {ACCESSORIES.map((a) => {
+            const locked = a.lvl > level; const sel = cfg.accessory === a.id;
+            return (
+              <button key={a.id} disabled={locked} onClick={() => setAv({ accessory: a.id })}
+                style={{ background: sel ? C.gold : "rgba(0,0,0,.06)", color: sel ? C.ink : C.inkSoft, opacity: locked ? 0.5 : 1 }}
+                className="rounded-xl px-3 py-2 text-sm font-bold">{a.label}{locked && <span style={{ color: C.inkSoft }} className="text-[9px] font-bold"> 🔒 Nv {a.lvl}</span>}</button>
             );
           })}
         </div>
@@ -1305,6 +1530,7 @@ function Stats({ data, level, playerClass, sound, update, onSignOut }) {
     { label: "Categoria favorita", value: favLabel, icon: "❤️" },
     { label: "Horas economizadas", value: `${hours}h`, icon: "⏱️" },
     { label: "Ouro guardado", value: data.gold, icon: "🪙" },
+    { label: "Gemas", value: data.gems || 0, icon: "💎" },
   ];
   return (
     <div className="space-y-4">
