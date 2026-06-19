@@ -156,6 +156,39 @@ const ACCESSORIES = [
 ];
 const DEFAULT_AVATAR = { skin: "#eebd96", hair: "curto", hairColor: "#2b2118", outfit: "camiseta", accessory: "nenhum" };
 
+/* ---------- Cosméticos (comprados com gemas) ---------- */
+const COSMETICS = [
+  // Pet
+  { id: "pet_laco", name: "Laço", emoji: "🎀", target: "pet", slot: "petHat", cost: 30 },
+  { id: "pet_flor", name: "Florzinha", emoji: "🌸", target: "pet", slot: "petHat", cost: 30 },
+  { id: "pet_cartola", name: "Cartola", emoji: "🎩", target: "pet", slot: "petHat", cost: 45 },
+  { id: "pet_mago", name: "Chapéu de Mago", emoji: "🧙", target: "pet", slot: "petHat", cost: 70 },
+  { id: "pet_coroa", name: "Coroa Real", emoji: "👑", target: "pet", slot: "petHat", cost: 150, bonusGems: 1 },
+  { id: "pet_oculos", name: "Óculos de Sol", emoji: "🕶️", target: "pet", slot: "petGlasses", cost: 40 },
+  // Avatar
+  { id: "av_cartola", name: "Cartola", emoji: "🎩", target: "avatar", slot: "avatarHat", cost: 45 },
+  { id: "av_capacete", name: "Capacete", emoji: "⛑️", target: "avatar", slot: "avatarHat", cost: 50 },
+  { id: "av_mago", name: "Chapéu de Mago", emoji: "🧙", target: "avatar", slot: "avatarHat", cost: 70 },
+  { id: "av_coroa", name: "Coroa Real", emoji: "👑", target: "avatar", slot: "avatarHat", cost: 160, bonusGems: 1 },
+  { id: "av_aureola", name: "Auréola", emoji: "😇", target: "avatar", slot: "avatarAura", cost: 110 },
+  { id: "av_fenix", name: "Aura de Fênix", emoji: "🔥", target: "avatar", slot: "avatarAura", cost: 140, bonusGems: 1 },
+];
+const DEFAULT_COSMETICS = { owned: [], equipped: {} };
+function equippedGemBonus(d) {
+  const eq = (d.cosmetics && d.cosmetics.equipped) || {};
+  let sum = 0;
+  for (const slot in eq) {
+    const item = COSMETICS.find((c) => c.id === eq[slot]);
+    if (item && item.bonusGems) sum += item.bonusGems;
+  }
+  return sum;
+}
+function cosmeticEmoji(d, slot) {
+  const eq = (d.cosmetics && d.cosmetics.equipped) || {};
+  const item = COSMETICS.find((c) => c.id === eq[slot]);
+  return item ? item.emoji : null;
+}
+
 /* ---------- Mensagens divertidas ao concluir ---------- */
 const FUN_MSGS = {
   pet: ["Seu bichinho está orgulhoso 🐾", "Carinho de aprovação ativado", "A casa agradece o cuidado"],
@@ -187,6 +220,9 @@ function markActive(d) {
     d.lastActiveDate = today;
     d.longestStreak = Math.max(d.longestStreak, d.currentStreak);
     d.streakBrokenNote = false;
+    // bônus diário de gemas dos cosméticos equipados
+    const bonus = equippedGemBonus(d);
+    if (bonus) d.gems = (d.gems || 0) + bonus;
   }
 }
 
@@ -210,6 +246,7 @@ const DEFAULT_DATA = {
   gems: 0,
   pet: { ...DEFAULT_PET },
   avatar: { ...DEFAULT_AVATAR },
+  cosmetics: { owned: [], equipped: {} },
   dayBonusDate: null,
   water: { date: dayKey(), count: 0 },          // count = copos de 250 ml
   waterScored: { date: dayKey(), cups: 0 },      // anti-farm da água
@@ -239,6 +276,7 @@ function freshData() {
     meals: MEAL_DEFAULTS.map((m) => ({ ...m })),
     pet: { ...DEFAULT_PET },
     avatar: { ...DEFAULT_AVATAR },
+    cosmetics: { owned: [], equipped: {} },
     gems: 0,
   };
 }
@@ -315,6 +353,7 @@ export default function RpgDaVida({ userId, onSignOut }) {
         if (typeof d.gems !== "number") d.gems = 0;
         if (!d.pet || typeof d.pet !== "object") d.pet = { ...DEFAULT_PET };
         if (!d.avatar || typeof d.avatar !== "object") d.avatar = { ...DEFAULT_AVATAR };
+        if (!d.cosmetics || typeof d.cosmetics !== "object") d.cosmetics = { owned: [], equipped: {} };
       }
       delete d.customTasks; delete d.customMeds;
 
@@ -483,6 +522,18 @@ export default function RpgDaVida({ userId, onSignOut }) {
 
   const update = (patch) => setData((prev) => ({ ...prev, ...patch }));
 
+  const buyCosmetic = (item) => {
+    const cos = data.cosmetics || { owned: [], equipped: {} };
+    if (cos.owned.includes(item.id)) return;
+    if ((data.gems || 0) < item.cost) { showToast("Gemas insuficientes 💎"); return; }
+    setData((prev) => {
+      const c = prev.cosmetics || { owned: [], equipped: {} };
+      return { ...prev, gems: (prev.gems || 0) - item.cost, cosmetics: { owned: [...c.owned, item.id], equipped: { ...c.equipped, [item.slot]: item.id } } };
+    });
+    if (data.soundOn) sound.coin();
+    showToast(`${item.emoji} ${item.name} comprado!`);
+  };
+
   /* ---------- água em copos de 250ml (XP só até a meta, sem farm) ---------- */
   const addWater = (delta) => {
     setData((prev) => {
@@ -586,7 +637,7 @@ export default function RpgDaVida({ userId, onSignOut }) {
           <Aventura {...{ data, level, xpInLevel, xpForNext, pct, playerClass, petStage, journeyStage,
             visibleTasks, quickOnly, setQuickOnly, toggleTask, setFocusMode, pending, allTasks: todayTasks, update }} />
         )}
-        {tab === "loja" && <Loja data={data} buyReward={buyReward} update={update} />}
+        {tab === "loja" && <Loja data={data} buyReward={buyReward} buyCosmetic={buyCosmetic} update={update} />}
         {tab === "pet" && <Pet data={data} petStage={petStage} petSad={petSad} update={update} />}
         {tab === "avatar" && <Avatar data={data} level={level} journeyStage={journeyStage} update={update} />}
         {tab === "saude" && <Saude data={data} addWater={addWater} toggleTask={toggleTask} update={update}
@@ -888,70 +939,138 @@ function FocusOverlay({ pending, onClose, onDone }) {
 }
 
 /* ---------- LOJA ---------- */
-function Loja({ data, buyReward, update }) {
+function Loja({ data, buyReward, buyCosmetic, update }) {
+  const [sub, setSub] = useState("recompensas");
   const [adding, setAdding] = useState(false);
   const [edit, setEdit] = useState(null);
   return (
     <div className="space-y-4">
-      <Panel style={{ background: `linear-gradient(160deg, ${C.parch}, ${C.parch2})` }}>
+      {/* alternância */}
+      <div className="flex gap-2">
+        <button onClick={() => setSub("recompensas")}
+          style={{ background: sub === "recompensas" ? C.gold : C.night2, color: sub === "recompensas" ? C.ink : "#fff", border: `3px solid ${C.gold}` }}
+          className="flex-1 rounded-2xl py-2.5 font-serif font-bold active:scale-95 transition">🪙 Recompensas</button>
+        <button onClick={() => setSub("cosmeticos")}
+          style={{ background: sub === "cosmeticos" ? "#9b59b6" : C.night2, color: "#fff", border: "3px solid #9b59b6" }}
+          className="flex-1 rounded-2xl py-2.5 font-serif font-bold active:scale-95 transition">💎 Cosméticos</button>
+      </div>
+
+      {sub === "recompensas" && (
+        <>
+          <Panel style={{ background: `linear-gradient(160deg, ${C.parch}, ${C.parch2})` }}>
+            <div className="flex items-center justify-between">
+              <div style={{ color: C.ink }} className="font-serif text-xl font-black">🏪 Recompensas reais</div>
+              <span style={{ color: C.goldDeep }} className="flex items-center gap-1 font-bold"><Coins size={18} /> {data.gold}</span>
+            </div>
+            <p style={{ color: C.inkSoft }} className="mt-1 text-sm">Troque o ouro suado por prazeres reais. Você merece.</p>
+          </Panel>
+
+          {data.rewards.map((rw) => {
+            const can = data.gold >= rw.cost;
+            return (
+              <Panel key={rw.id} className="flex items-center gap-3">
+                <span className="text-3xl">{rw.emoji}</span>
+                <div className="min-w-0 flex-1">
+                  <div style={{ color: C.ink }} className="font-bold leading-tight">{rw.name}</div>
+                  <div style={{ color: C.goldDeep }} className="flex items-center gap-1 text-sm font-bold"><Coins size={13} /> {rw.cost}</div>
+                </div>
+                <button onClick={() => setEdit(rw)} style={{ color: C.inkSoft }} className="p-1"><Trash2 size={16} /></button>
+                <button onClick={() => buyReward(rw)} disabled={!can}
+                  style={{ background: can ? C.xpDeep : "rgba(0,0,0,.15)", color: can ? "#fff" : C.inkSoft }}
+                  className="rounded-xl px-4 py-2 text-sm font-bold active:scale-95 transition">Resgatar</button>
+              </Panel>
+            );
+          })}
+
+          {edit && (
+            <Panel style={{ borderColor: C.ember }}>
+              <div style={{ color: C.ink }} className="text-sm">Remover <b>{edit.name}</b> da loja?</div>
+              <div className="mt-2 flex gap-2">
+                <button onClick={() => setEdit(null)} style={{ color: C.inkSoft }} className="flex-1 rounded-xl py-2 text-sm font-bold">Cancelar</button>
+                <button onClick={() => { update({ rewards: data.rewards.filter((r) => r.id !== edit.id) }); setEdit(null); }}
+                  style={{ background: C.ember, color: "#fff" }} className="flex-1 rounded-xl py-2 text-sm font-bold">Remover</button>
+              </div>
+            </Panel>
+          )}
+
+          {adding ? (
+            <AddRewardForm onCancel={() => setAdding(false)} onAdd={(r) => { update({ rewards: [...data.rewards, r] }); setAdding(false); }} />
+          ) : (
+            <button onClick={() => setAdding(true)} style={{ borderColor: C.gold, color: C.parch }}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed py-3 text-sm font-bold active:scale-95 transition">
+              <Plus size={18} /> Criar recompensa
+            </button>
+          )}
+
+          {data.purchases.length > 0 && (
+            <Panel>
+              <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">📜 Histórico</div>
+              <div className="space-y-1">
+                {data.purchases.slice(0, 8).map((p) => (
+                  <div key={p.id} className="flex items-center justify-between text-sm" style={{ color: C.inkSoft }}>
+                    <span>{p.emoji} {p.name}</span>
+                    <span>-{p.cost} 🪙</span>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+        </>
+      )}
+
+      {sub === "cosmeticos" && <Cosmeticos data={data} buyCosmetic={buyCosmetic} update={update} />}
+    </div>
+  );
+}
+
+function Cosmeticos({ data, buyCosmetic, update }) {
+  const cos = data.cosmetics || { owned: [], equipped: {} };
+  const gems = data.gems || 0;
+  const equip = (item) => {
+    const isEq = cos.equipped[item.slot] === item.id;
+    update({ cosmetics: { ...cos, equipped: { ...cos.equipped, [item.slot]: isEq ? null : item.id } } });
+  };
+  const groups = [["pet", "🐾 Pet"], ["avatar", "🧑 Avatar"]];
+  return (
+    <>
+      <Panel style={{ background: "linear-gradient(160deg, #efe2f7, #ead2a0)" }}>
         <div className="flex items-center justify-between">
-          <div style={{ color: C.ink }} className="font-serif text-xl font-black">🏪 Loja de Recompensas</div>
-          <span style={{ color: C.goldDeep }} className="flex items-center gap-1 font-bold"><Coins size={18} /> {data.gold}</span>
+          <div style={{ color: C.ink }} className="font-serif text-xl font-black">💎 Cosméticos</div>
+          <span style={{ color: "#7d3ca6" }} className="flex items-center gap-1 font-bold"><Gem size={16} /> {gems}</span>
         </div>
-        <p style={{ color: C.inkSoft }} className="mt-1 text-sm">Troque o ouro suado por prazeres reais. Você merece.</p>
+        <p style={{ color: C.inkSoft }} className="mt-1 text-sm">Gaste suas gemas em itens pro Pet e pro Avatar. Alguns dão +1 gema por dia. 💎</p>
       </Panel>
 
-      {data.rewards.map((rw) => {
-        const can = data.gold >= rw.cost;
-        return (
-          <Panel key={rw.id} className="flex items-center gap-3">
-            <span className="text-3xl">{rw.emoji}</span>
-            <div className="min-w-0 flex-1">
-              <div style={{ color: C.ink }} className="font-bold leading-tight">{rw.name}</div>
-              <div style={{ color: C.goldDeep }} className="flex items-center gap-1 text-sm font-bold"><Coins size={13} /> {rw.cost}</div>
-            </div>
-            <button onClick={() => setEdit(rw)} style={{ color: C.inkSoft }} className="p-1"><Trash2 size={16} /></button>
-            <button onClick={() => buyReward(rw)} disabled={!can}
-              style={{ background: can ? C.xpDeep : "rgba(0,0,0,.15)", color: can ? "#fff" : C.inkSoft }}
-              className="rounded-xl px-4 py-2 text-sm font-bold active:scale-95 transition">Resgatar</button>
-          </Panel>
-        );
-      })}
-
-      {edit && (
-        <Panel style={{ borderColor: C.ember }}>
-          <div style={{ color: C.ink }} className="text-sm">Remover <b>{edit.name}</b> da loja?</div>
-          <div className="mt-2 flex gap-2">
-            <button onClick={() => setEdit(null)} style={{ color: C.inkSoft }} className="flex-1 rounded-xl py-2 text-sm font-bold">Cancelar</button>
-            <button onClick={() => { update({ rewards: data.rewards.filter((r) => r.id !== edit.id) }); setEdit(null); }}
-              style={{ background: C.ember, color: "#fff" }} className="flex-1 rounded-xl py-2 text-sm font-bold">Remover</button>
-          </div>
-        </Panel>
-      )}
-
-      {adding ? (
-        <AddRewardForm onCancel={() => setAdding(false)} onAdd={(r) => { update({ rewards: [...data.rewards, r] }); setAdding(false); }} />
-      ) : (
-        <button onClick={() => setAdding(true)} style={{ borderColor: C.gold, color: C.parch }}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed py-3 text-sm font-bold active:scale-95 transition">
-          <Plus size={18} /> Criar recompensa
-        </button>
-      )}
-
-      {data.purchases.length > 0 && (
-        <Panel>
-          <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">📜 Histórico</div>
-          <div className="space-y-1">
-            {data.purchases.slice(0, 8).map((p) => (
-              <div key={p.id} className="flex items-center justify-between text-sm" style={{ color: C.inkSoft }}>
-                <span>{p.emoji} {p.name}</span>
-                <span>-{p.cost} 🪙</span>
-              </div>
-            ))}
-          </div>
-        </Panel>
-      )}
-    </div>
+      {groups.map(([t, label]) => (
+        <div key={t} className="space-y-2">
+          <div style={{ color: C.parch }} className="px-1 font-serif text-lg font-bold">{label}</div>
+          {COSMETICS.filter((c) => c.target === t).map((item) => {
+            const owned = cos.owned.includes(item.id);
+            const equipped = cos.equipped[item.slot] === item.id;
+            const can = gems >= item.cost;
+            return (
+              <Panel key={item.id} className="flex items-center gap-3">
+                <span className="text-3xl">{item.emoji}</span>
+                <div className="min-w-0 flex-1">
+                  <div style={{ color: C.ink }} className="font-bold leading-tight">{item.name}</div>
+                  {item.bonusGems ? <div style={{ color: "#2a8c7e" }} className="text-xs font-bold">+{item.bonusGems} 💎/dia</div> : null}
+                  {!owned && <div style={{ color: "#7d3ca6" }} className="flex items-center gap-1 text-sm font-bold"><Gem size={12} /> {item.cost}</div>}
+                </div>
+                {owned ? (
+                  <button onClick={() => equip(item)}
+                    style={{ background: equipped ? C.xpDeep : "rgba(0,0,0,.08)", color: equipped ? "#fff" : C.ink }}
+                    className="rounded-xl px-4 py-2 text-sm font-bold active:scale-95 transition">{equipped ? "Equipado ✓" : "Equipar"}</button>
+                ) : (
+                  <button onClick={() => buyCosmetic(item)} disabled={!can}
+                    style={{ background: can ? "#9b59b6" : "rgba(0,0,0,.15)", color: can ? "#fff" : C.inkSoft }}
+                    className="rounded-xl px-4 py-2 text-sm font-bold active:scale-95 transition">Comprar</button>
+                )}
+              </Panel>
+            );
+          })}
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -1011,7 +1130,7 @@ function petEars(species, color) {
   </>);
 }
 
-function PetAvatar({ size = 120, species = "gato", color = "#ffffff", sad = false, stageIndex = 0, idle = true }) {
+function PetAvatar({ size = 120, species = "gato", color = "#ffffff", sad = false, stageIndex = 0, idle = true, hat = null, glasses = null }) {
   const sleepy = stageIndex === 0 && !sad;
   const crown = stageIndex >= 3;
   const sparkles = stageIndex >= 4;
@@ -1063,6 +1182,8 @@ function PetAvatar({ size = 120, species = "gato", color = "#ffffff", sad = fals
           <line x1="87" y1="61" x2="70" y2="63" /><line x1="87" y1="68" x2="70" y2="68" />
         </g>
       )}
+      {glasses && <text x="50" y="63" fontSize="22" textAnchor="middle">{glasses}</text>}
+      {hat && <text x="50" y="25" fontSize="30" textAnchor="middle">{hat}</text>}
     </svg>
   );
 }
@@ -1079,7 +1200,7 @@ function Pet({ data, petStage, petSad, update }) {
   return (
     <div className="space-y-4">
       <Panel style={{ background: `linear-gradient(160deg, #f0f7ff, ${C.parch2})` }} className="text-center">
-        <div className="flex justify-center"><PetAvatar size={150} species={pet.species} color={pet.color} sad={petSad} stageIndex={idx} /></div>
+        <div className="flex justify-center"><PetAvatar size={150} species={pet.species} color={pet.color} sad={petSad} stageIndex={idx} hat={cosmeticEmoji(data, "petHat")} glasses={cosmeticEmoji(data, "petGlasses")} /></div>
         {editingName ? (
           <input autoFocus value={nameVal} onChange={(e) => setNameVal(e.target.value)}
             onBlur={() => { setPet({ name: nameVal.trim() || "Pet" }); setEditingName(false); }}
@@ -1161,17 +1282,18 @@ function hairEl(hair, color) {
   return null; // careca
 }
 
-function AvatarFig({ cfg, level = 1, size = 150 }) {
+function AvatarFig({ cfg, level = 1, size = 150, hat = null, aura = null }) {
   const skin = cfg?.skin || DEFAULT_AVATAR.skin;
   const hair = cfg?.hair || "curto";
   const hairColor = cfg?.hairColor || "#2b2118";
   const outfit = OUTFITS.find((o) => o.id === cfg?.outfit) || OUTFITS[0];
   const acc = cfg?.accessory || "nenhum";
   const happy = level >= 5;
-  const aura = level >= 10;
+  const auraRing = level >= 10;
   return (
     <svg width={size} height={size * 1.2} viewBox="0 0 100 120" style={{ overflow: "visible" }}>
-      {aura && <circle cx="50" cy="46" r="42" fill="none" stroke={C.gold} strokeWidth="2" opacity="0.5" style={{ animation: "wiggle 3s ease-in-out infinite" }} />}
+      {aura && <text x="50" y="62" fontSize="64" textAnchor="middle" opacity="0.22">{aura}</text>}
+      {auraRing && <circle cx="50" cy="46" r="42" fill="none" stroke={C.gold} strokeWidth="2" opacity="0.5" style={{ animation: "wiggle 3s ease-in-out infinite" }} />}
       {cfg?.outfit === "capa" && <path d="M30 72 Q50 66 70 72 L80 118 Q50 112 20 118 Z" fill="#7d3ca6" />}
       <path d="M26 118 Q26 80 50 78 Q74 80 74 118 Z" fill={outfit.color} stroke="#00000022" strokeWidth="1" />
       {outfit.id === "armadura" && (<>
@@ -1188,6 +1310,7 @@ function AvatarFig({ cfg, level = 1, size = 150 }) {
       {acc === "oculos" && <g stroke="#26201a" strokeWidth="2" fill="none"><circle cx="42" cy="46" r="6" /><circle cx="58" cy="46" r="6" /><line x1="48" y1="46" x2="52" y2="46" /></g>}
       {acc === "chapeu" && <g><rect x="30" y="25" width="40" height="6" rx="3" fill="#5a3b22" /><rect x="38" y="12" width="24" height="16" rx="4" fill="#7a4f30" /></g>}
       {acc === "coroa" && <path d="M34 26 L40 13 L46 23 L50 9 L54 23 L60 13 L66 26 Z" fill={C.gold} stroke={C.goldDeep} strokeWidth="1" />}
+      {hat && <text x="50" y="24" fontSize="26" textAnchor="middle">{hat}</text>}
     </svg>
   );
 }
@@ -1199,7 +1322,7 @@ function Avatar({ data, level, journeyStage, update }) {
   return (
     <div className="space-y-4">
       <Panel style={{ background: `linear-gradient(160deg, #fbf2dc, ${C.parch2})` }} className="text-center">
-        <div className="flex justify-center"><AvatarFig cfg={cfg} level={level} size={160} /></div>
+        <div className="flex justify-center"><AvatarFig cfg={cfg} level={level} size={160} hat={cosmeticEmoji(data, "avatarHat")} aura={cosmeticEmoji(data, "avatarAura")} /></div>
         <div style={{ color: C.ink }} className="mt-1 font-serif text-2xl font-black">{data.playerName}</div>
         <div style={{ color: C.goldDeep }} className="font-bold">Nível {level} · {journeyStage.emoji} {journeyStage.name}</div>
         <p style={{ color: C.inkSoft }} className="mt-2 text-sm">Suba de nível para desbloquear novos visuais. Aos 5, seu herói ganha um sorrisão; aos 10, uma aura dourada. ✨</p>
