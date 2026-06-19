@@ -2,8 +2,8 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "RPG da Vida",
-  description: "Transforme sua rotina e seus cuidados de saúde numa aventura de RPG.",
+  title: "QuesTAH",
+  description: "Sua rotina vira aventura. Hábitos, saúde e foco para mentes com TDAH.",
 };
 
 export const viewport: Viewport = {

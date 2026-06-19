@@ -1,8 +1,8 @@
-# RPG da Vida 🎮⚔️
+# QuesTAH 🎮⚔️
 
-Transforme sua rotina, seus hábitos e seus cuidados de saúde numa aventura de RPG: XP, níveis, ouro, recompensas, conquistas, chefes, streaks, uma gata companheira (Mona) e uma aba de **Saúde** com remédios, água e refeições.
+> Antes "RPG da Vida". Sua rotina vira aventura — feito para mentes com TDAH.
 
-Feito com **Next.js + TypeScript + Tailwind + Supabase** (login por link mágico no e-mail e progresso sincronizado na nuvem). Pronto para hospedar na **Vercel** e compartilhar o link — cada pessoa tem o próprio progresso.
+Transforme rotina, hábitos e cuidados de saúde num RPG: XP, níveis, ouro, recompensas, conquistas, chefes, streaks, um pet companheiro (Mona) e uma aba de **Saúde** com remédios, **água em litros** e **refeições nomeadas**. Pontuação **1x por dia por tarefa** (anti-farm) e **missões 100% editáveis**.
 
 ---
 

@@ -6,7 +6,7 @@ import { loadSave, persistSave } from "@/lib/save";
 import {
   Sword, Store, Cat, Heart, BarChart3, Crown, Flame,
   Plus, Minus, Trash2, X, Target, Zap, Volume2, VolumeX, Coins, Check,
-  Trophy, Skull, Droplet, Pill, Sun, Moon, Utensils, LogOut,
+  Trophy, Skull, Droplet, Pill, Sun, Moon, Utensils, LogOut, Pencil,
 } from "lucide-react";
 
 /* ============================================================
@@ -59,11 +59,19 @@ const BASE_TASKS = [
   { id: "t_celular", key: "celular", name: "Pegou o celular", desc: "Antes de sair", xp: 5, category: "pessoal" },
 ];
 
-/* ---------- Saúde: remédios começam vazios (cada um monta o seu) ---------- */
-const HEALTH_TASKS = [];
-const MED_IDS = HEALTH_TASKS.filter((t) => t.med).map((t) => t.id);
-const WATER_GOAL = 8;
-const MEAL_GOAL = 5;
+/* ---------- Saúde ---------- */
+// Os remédios começam vazios (cada um monta o seu, na aba Saúde).
+const MEAL_DEFAULTS = [
+  { id: "meal_cafe", name: "Café da manhã", xp: 8 },
+  { id: "meal_almoco", name: "Almoço", xp: 8 },
+  { id: "meal_lanche", name: "Lanche da tarde", xp: 6 },
+  { id: "meal_janta", name: "Janta", xp: 8 },
+  { id: "meal_ceia", name: "Ceia", xp: 5 },
+];
+const CUP_ML = 250;            // 1 copo = 250 ml
+const WATER_XP = 2;            // XP por copo (só até a meta)
+const WATER_GOAL_L_DEFAULT = 3; // meta padrão em litros (configurável)
+const cupsForLiters = (l) => Math.round((l * 1000) / CUP_ML);
 
 /* ---------- Recompensas padrão ---------- */
 const DEFAULT_REWARDS = [
@@ -147,21 +155,24 @@ function markActive(d) {
 
 /* ---------- Estado inicial ---------- */
 const DEFAULT_DATA = {
-  v: 1,
+  v: 2,
   playerName: "Herói",
   xpTotal: 0,
   gold: 0,
   doneToday: [],
+  scoredToday: { date: dayKey(), ids: [] }, // anti-farm: o que já pontuou hoje
   lastResetDate: dayKey(),
-  customTasks: [],
-  customMeds: [],
+  tasks: null,   // semeado em freshData()/migração
+  meds: [],      // remédios do usuário (manhã/noite)
+  meals: null,   // refeições nomeadas (semeado)
   rewards: DEFAULT_REWARDS,
   purchases: [],
   tasksCompleted: 0,
   catCounts: { pet: 0, casa: 0, pessoal: 0, saude: 0 },
   taskCounts: {},
-  water: { date: dayKey(), count: 0 },
-  meals: { date: dayKey(), count: 0 },
+  water: { date: dayKey(), count: 0 },          // count = copos de 250 ml
+  waterScored: { date: dayKey(), cups: 0 },      // anti-farm da água
+  waterGoalL: WATER_GOAL_L_DEFAULT,
   daysActive: [],
   currentStreak: 0,
   longestStreak: 0,
@@ -174,6 +185,19 @@ const DEFAULT_DATA = {
   soundOn: true,
   streakBrokenNote: false,
 };
+
+/** Estado novo com missões e refeições já semeadas. */
+function freshData() {
+  return {
+    ...DEFAULT_DATA,
+    scoredToday: { date: dayKey(), ids: [] },
+    water: { date: dayKey(), count: 0 },
+    waterScored: { date: dayKey(), cups: 0 },
+    tasks: BASE_TASKS.map((t) => ({ ...t })),
+    meds: [],
+    meals: MEAL_DEFAULTS.map((m) => ({ ...m })),
+  };
+}
 
 const SAVE_KEY = "rpg_da_vida_save_v1";
 
@@ -229,14 +253,32 @@ export default function RpgDaVida({ userId, onSignOut }) {
       try {
         loaded = await loadSave(supabase, userId);
       } catch (e) { /* primeira vez ou erro de rede */ }
-      let d = { ...DEFAULT_DATA, ...(loaded || {}) };
+      let d = { ...freshData(), ...(loaded || {}) };
+
+      // ---- migração de saves antigos (preserva o progresso) ----
+      if (loaded) {
+        if (loaded.tasks === undefined || loaded.tasks === null) {
+          d.tasks = [...BASE_TASKS.map((t) => ({ ...t })), ...((loaded.customTasks) || [])];
+        }
+        if (loaded.meds === undefined) d.meds = [...((loaded.customMeds) || [])];
+        if (loaded.meals === undefined || !Array.isArray(loaded.meals)) {
+          d.meals = MEAL_DEFAULTS.map((m) => ({ ...m }));
+        }
+        if (!d.scoredToday || d.scoredToday.date !== dayKey()) d.scoredToday = { date: dayKey(), ids: [] };
+        if (!d.waterScored || d.waterScored.date !== dayKey()) d.waterScored = { date: dayKey(), cups: 0 };
+        if (typeof d.waterGoalL !== "number") d.waterGoalL = WATER_GOAL_L_DEFAULT;
+        if (!d.water || typeof d.water.count !== "number") d.water = { date: dayKey(), count: 0 };
+      }
+      delete d.customTasks; delete d.customMeds;
+
       // reset diário
       const today = dayKey();
       if (d.lastResetDate !== today) {
         d.doneToday = [];
         d.lastResetDate = today;
         d.water = { date: today, count: 0 };
-        d.meals = { date: today, count: 0 };
+        d.waterScored = { date: today, cups: 0 };
+        d.scoredToday = { date: today, ids: [] };
         // chama da medicação: quebra se pulou um dia
         if (d.lastMedDate && d.lastMedDate !== today && d.lastMedDate !== yesterdayKey()) d.medStreak = 0;
         // streak: marca quebra amigável se o último dia ativo não foi ontem nem hoje
@@ -271,7 +313,7 @@ export default function RpgDaVida({ userId, onSignOut }) {
   }
 
   /* ---------- derivados ---------- */
-  const allTasks = [...BASE_TASKS, ...data.customTasks];
+  const allTasks = data.tasks || [];
   const { level, xpInLevel, xpForNext } = levelFromXp(data.xpTotal);
   const pct = Math.min(100, Math.round((xpInLevel / xpForNext) * 100));
   const playerClass = getPlayerClass(data.catCounts, data.tasksCompleted, level);
@@ -300,71 +342,71 @@ export default function RpgDaVida({ userId, onSignOut }) {
   };
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 1800); };
 
-  /* ---------- concluir / desfazer tarefa ---------- */
+  /* ---------- concluir / desfazer tarefa (anti-farm: pontua 1x/dia) ---------- */
   const toggleTask = (task) => {
     const isDone = data.doneToday.includes(task.id);
     setData((prev) => {
       const d = { ...prev };
+      const today = dayKey();
       if (!isDone) {
-        // concluir
-        const prevLevel = levelFromXp(d.xpTotal).level;
-        d.xpTotal += task.xp;
-        d.gold += task.xp;
         d.doneToday = [...d.doneToday, task.id];
-        d.tasksCompleted += 1;
-        d.catCounts = { ...d.catCounts, [task.category]: (d.catCounts[task.category] || 0) + 1 };
-        if (task.key) d.taskCounts = { ...d.taskCounts, [task.key]: (d.taskCounts[task.key] || 0) + 1 };
+        const scored = d.scoredToday && d.scoredToday.date === today ? d.scoredToday.ids : [];
+        const already = scored.includes(task.id);
+        if (!already) {
+          // pontua só na primeira vez do dia
+          const prevLevel = levelFromXp(d.xpTotal).level;
+          d.xpTotal += task.xp;
+          d.gold += task.xp;
+          d.scoredToday = { date: today, ids: [...scored, task.id] };
+          d.tasksCompleted += 1;
+          d.catCounts = { ...d.catCounts, [task.category]: (d.catCounts[task.category] || 0) + 1 };
+          if (task.key) d.taskCounts = { ...d.taskCounts, [task.key]: (d.taskCounts[task.key] || 0) + 1 };
 
-        // dias ativos + streak
-        markActive(d);
-        // remédios do dia completos? (inclui remédios adicionados)
-        const medIds = [...MED_IDS, ...(d.customMeds || []).map((m) => m.id)];
-        if (medIds.length && medIds.every((id) => d.doneToday.includes(id))) {
-          const today2 = dayKey();
-          if (d.lastMedDate !== today2) {
-            d.medStreak = d.lastMedDate === yesterdayKey() ? d.medStreak + 1 : 1;
-            d.lastMedDate = today2;
-            d.medDaysTotal = (d.medDaysTotal || 0) + 1;
+          markActive(d);
+
+          // remédios do dia completos?
+          const medIds = (d.meds || []).map((m) => m.id);
+          if (medIds.length && medIds.every((id) => d.doneToday.includes(id))) {
+            if (d.lastMedDate !== today) {
+              d.medStreak = d.lastMedDate === yesterdayKey() ? d.medStreak + 1 : 1;
+              d.lastMedDate = today;
+              d.medDaysTotal = (d.medDaysTotal || 0) + 1;
+            }
+          }
+
+          const newAch = checkAchievements(d, level);
+          d.achievements = newAch.list;
+
+          const newLevel = levelFromXp(d.xpTotal).level;
+          if (newLevel > prevLevel) {
+            if (d.soundOn) sound.levelUp();
+            setLevelUpBanner(newLevel);
+            setTimeout(() => setLevelUpBanner(null), 2600);
+          } else if (d.soundOn) sound.ding();
+
+          const color = (CATS[task.category] || CATS.pessoal).color;
+          spawnPop(`+${task.xp} XP`, color);
+          spawnParticles(color);
+          const arr = FUN_MSGS[task.category] || FUN_MSGS.pessoal;
+          showToast(arr[Math.floor(Math.random() * arr.length)]);
+          if (newAch.unlocked.length) {
+            const a = ACHIEVEMENTS.find((x) => x.id === newAch.unlocked[0]);
+            setTimeout(() => showToast(`Conquista: ${a.emoji} ${a.name}`), 900);
+          }
+
+          const bdef = checkBosses(d);
+          if (bdef) {
+            d.xpTotal += bdef.rewardXp; d.gold += bdef.rewardGold;
+            d.bossesDefeated = [...d.bossesDefeated, bdef.id];
+            if (d.soundOn) sound.boss();
+            setBossBanner(bdef);
+            setTimeout(() => setBossBanner(null), 3200);
           }
         }
-        // novas conquistas
-        const newAch = checkAchievements(d, level);
-        d.achievements = newAch.list;
-
-        // efeitos (fora do setState idealmente, mas seguro chamar aqui)
-        const newLevel = levelFromXp(d.xpTotal).level;
-        if (newLevel > prevLevel) {
-          if (d.soundOn) sound.levelUp();
-          setLevelUpBanner(newLevel);
-          setTimeout(() => setLevelUpBanner(null), 2600);
-        } else if (d.soundOn) sound.ding();
-
-        spawnPop(`+${task.xp} XP`, CATS[task.category].color);
-        spawnParticles(CATS[task.category].color);
-        const arr = FUN_MSGS[task.category];
-        showToast(arr[Math.floor(Math.random() * arr.length)]);
-        if (newAch.unlocked.length) {
-          const a = ACHIEVEMENTS.find((x) => x.id === newAch.unlocked[0]);
-          setTimeout(() => showToast(`Conquista: ${a.emoji} ${a.name}`), 900);
-        }
-
-        // chefes
-        const bdef = checkBosses(d);
-        if (bdef) {
-          d.xpTotal += bdef.rewardXp; d.gold += bdef.rewardGold;
-          d.bossesDefeated = [...d.bossesDefeated, bdef.id];
-          if (d.soundOn) sound.boss();
-          setBossBanner(bdef);
-          setTimeout(() => setBossBanner(null), 3200);
-        }
+        // se já pontuou hoje, só marca (sem XP, sem efeitos)
       } else {
-        // desfazer (reverte contadores; nível recalcula a partir do xpTotal)
-        d.xpTotal = Math.max(0, d.xpTotal - task.xp);
-        d.gold = Math.max(0, d.gold - task.xp);
+        // desfazer: apenas desmarca. NÃO devolve XP nem permite ganhar de novo.
         d.doneToday = d.doneToday.filter((id) => id !== task.id);
-        d.tasksCompleted = Math.max(0, d.tasksCompleted - 1);
-        d.catCounts = { ...d.catCounts, [task.category]: Math.max(0, (d.catCounts[task.category] || 0) - 1) };
-        if (task.key) d.taskCounts = { ...d.taskCounts, [task.key]: Math.max(0, (d.taskCounts[task.key] || 0) - 1) };
       }
       return d;
     });
@@ -384,21 +426,26 @@ export default function RpgDaVida({ userId, onSignOut }) {
 
   const update = (patch) => setData((prev) => ({ ...prev, ...patch }));
 
-  /* ---------- contadores de saúde (água / refeições) ---------- */
-  const incCounter = (kind, delta, xp) => {
+  /* ---------- água em copos de 250ml (XP só até a meta, sem farm) ---------- */
+  const addWater = (delta) => {
     setData((prev) => {
       const d = { ...prev };
       const today = dayKey();
-      const cur = d[kind] && d[kind].date === today ? d[kind].count : 0;
+      const goalCups = cupsForLiters(d.waterGoalL || WATER_GOAL_L_DEFAULT);
+      const cur = d.water && d.water.date === today ? d.water.count : 0;
       const next = Math.max(0, cur + delta);
       if (next === cur) return prev;
-      d[kind] = { date: today, count: next };
+      d.water = { date: today, count: next };
       if (delta > 0) {
-        d.xpTotal += xp; d.gold += xp; markActive(d);
-        if (d.soundOn) sound.ding();
-        spawnPop(`+${xp} XP`, CATS.saude.color); spawnParticles(CATS.saude.color);
-      } else {
-        d.xpTotal = Math.max(0, d.xpTotal - xp); d.gold = Math.max(0, d.gold - xp);
+        const scored = d.waterScored && d.waterScored.date === today ? d.waterScored.cups : 0;
+        // só pontua "degraus" novos, nunca repete, e nunca passa da meta
+        if (next <= goalCups && next > scored) {
+          d.xpTotal += WATER_XP; d.gold += WATER_XP;
+          d.waterScored = { date: today, cups: next };
+          markActive(d);
+          if (d.soundOn) sound.ding();
+          spawnPop(`+${WATER_XP} XP`, CATS.saude.color); spawnParticles(CATS.saude.color);
+        }
       }
       return d;
     });
@@ -477,8 +524,8 @@ export default function RpgDaVida({ userId, onSignOut }) {
         )}
         {tab === "loja" && <Loja data={data} buyReward={buyReward} update={update} />}
         {tab === "mona" && <Mona data={data} petStage={petStage} petSad={petSad} />}
-        {tab === "saude" && <Saude data={data} incCounter={incCounter} toggleTask={toggleTask} update={update}
-          medDone={(() => { const ids = [...MED_IDS, ...(data.customMeds || []).map((m) => m.id)]; return ids.length > 0 && ids.every((id) => data.doneToday.includes(id)); })()} />}
+        {tab === "saude" && <Saude data={data} addWater={addWater} toggleTask={toggleTask} update={update}
+          medDone={(() => { const ids = (data.meds || []).map((m) => m.id); return ids.length > 0 && ids.every((id) => data.doneToday.includes(id)); })()} />}
         {tab === "stats" && <Stats data={data} level={level} playerClass={playerClass} sound={sound} update={update} onSignOut={onSignOut} />}
       </main>
 
@@ -527,9 +574,19 @@ function Tag({ children, color }) {
 function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStage, journeyStage,
   visibleTasks, quickOnly, setQuickOnly, toggleTask, setFocusMode, pending, allTasks, update }) {
   const [adding, setAdding] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [editingTask, setEditingTask] = useState(null);
+  const tasks = data.tasks || [];
   const grouped = { pet: [], casa: [], pessoal: [] };
-  visibleTasks.forEach((t) => grouped[t.category].push(t));
+  visibleTasks.forEach((t) => { if (!grouped[t.category]) grouped[t.category] = []; grouped[t.category].push(t); });
   const doneCount = allTasks.filter((t) => data.doneToday.includes(t.id)).length;
+
+  const saveTask = (task) => {
+    const exists = tasks.find((t) => t.id === task.id);
+    update({ tasks: exists ? tasks.map((t) => (t.id === task.id ? task : t)) : [...tasks, task] });
+    setAdding(false); setEditingTask(null);
+  };
+  const removeTask = (id) => update({ tasks: tasks.filter((t) => t.id !== id), doneToday: data.doneToday.filter((x) => x !== id) });
 
   return (
     <div className="space-y-4">
@@ -594,8 +651,18 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
       {/* progresso do dia */}
       <div style={{ color: C.parch }} className="flex items-center justify-between px-1 text-sm font-bold">
         <span className="font-serif text-lg">Missões Diárias</span>
-        <span style={{ color: C.gold }}>{doneCount}/{allTasks.length}</span>
+        <span className="flex items-center gap-3">
+          <span style={{ color: C.gold }}>{doneCount}/{allTasks.length}</span>
+          <button onClick={() => { setEditMode((e) => !e); setEditingTask(null); setAdding(false); }}
+            style={{ color: editMode ? C.gold : C.parch2 }} className="flex items-center gap-1 text-xs font-bold">
+            <Pencil size={14} /> {editMode ? "Pronto" : "Editar"}
+          </button>
+        </span>
       </div>
+
+      {(adding || editingTask) && (
+        <TaskForm initial={editingTask} onCancel={() => { setAdding(false); setEditingTask(null); }} onSave={saveTask} />
+      )}
 
       {Object.entries(grouped).map(([cat, list]) => list.length > 0 && (
         <div key={cat} className="space-y-2">
@@ -606,42 +673,39 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
           {list.map((t) => {
             const done = data.doneToday.includes(t.id);
             return (
-              <button key={t.id} onClick={() => toggleTask(t)}
-                style={{ background: done ? "rgba(244,230,197,.45)" : C.parch, border: `3px solid ${done ? C.xpDeep : C.goldDeep}`, boxShadow: done ? "none" : "0 4px 0 rgba(0,0,0,.2)" }}
-                className="flex w-full items-center gap-3 rounded-2xl p-3 text-left active:scale-[.98] transition">
-                <span style={{ background: done ? C.xp : "transparent", border: `2px solid ${done ? C.xpDeep : C.inkSoft}`, color: "#fff" }}
-                  className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg">
-                  {done && <Check size={18} strokeWidth={3} />}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span style={{ color: C.ink, textDecoration: done ? "line-through" : "none", opacity: done ? 0.6 : 1 }}
-                    className="block font-bold leading-tight">{t.name}</span>
-                  <span style={{ color: C.inkSoft }} className="block text-xs">{t.desc}</span>
-                </span>
-                <span className="flex flex-shrink-0 flex-col items-end gap-1">
-                  <Tag color={C.xpDeep}>+{t.xp} XP</Tag>
-                  {t.xp <= 5 && <span style={{ color: C.inkSoft }} className="text-[9px] font-bold">⚡ rápida</span>}
-                </span>
-              </button>
+              <div key={t.id} className="flex items-center gap-2">
+                <button onClick={() => (editMode ? setEditingTask(t) : toggleTask(t))}
+                  style={{ background: done ? "rgba(244,230,197,.45)" : C.parch, border: `3px solid ${done ? C.xpDeep : C.goldDeep}`, boxShadow: done ? "none" : "0 4px 0 rgba(0,0,0,.2)" }}
+                  className="flex flex-1 items-center gap-3 rounded-2xl p-3 text-left active:scale-[.98] transition">
+                  <span style={{ background: done ? C.xp : "transparent", border: `2px solid ${done ? C.xpDeep : C.inkSoft}`, color: "#fff" }}
+                    className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg">
+                    {editMode ? <Pencil size={14} style={{ color: C.inkSoft }} /> : (done && <Check size={18} strokeWidth={3} />)}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span style={{ color: C.ink, textDecoration: done && !editMode ? "line-through" : "none", opacity: done && !editMode ? 0.6 : 1 }}
+                      className="block font-bold leading-tight">{t.name}</span>
+                    <span style={{ color: C.inkSoft }} className="block text-xs">{t.desc}</span>
+                  </span>
+                  <span className="flex flex-shrink-0 flex-col items-end gap-1">
+                    <Tag color={C.xpDeep}>+{t.xp} XP</Tag>
+                    {t.xp <= 5 && <span style={{ color: C.inkSoft }} className="text-[9px] font-bold">⚡ rápida</span>}
+                  </span>
+                </button>
+                {editMode && (
+                  <button onClick={() => removeTask(t.id)} style={{ color: C.ember }} className="p-1 active:scale-90 transition"><Trash2 size={16} /></button>
+                )}
+              </div>
             );
           })}
         </div>
       ))}
 
       {/* adicionar tarefa */}
-      {adding ? (
-        <AddTaskForm onCancel={() => setAdding(false)} onAdd={(t) => { update({ customTasks: [...data.customTasks, t] }); setAdding(false); }} />
-      ) : (
-        <button onClick={() => setAdding(true)} style={{ borderColor: C.gold, color: C.parch }}
+      {!adding && !editingTask && (
+        <button onClick={() => { setAdding(true); setEditMode(false); }} style={{ borderColor: C.gold, color: C.parch }}
           className="flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed py-3 text-sm font-bold active:scale-95 transition">
           <Plus size={18} /> Criar nova missão
         </button>
-      )}
-
-      {data.customTasks.length > 0 && (
-        <div style={{ color: C.inkSoft }} className="px-1 text-[11px]">
-          Missões personalizadas: toque e segure não disponível — remova em Status › suas missões.
-        </div>
       )}
     </div>
   );
@@ -665,32 +729,53 @@ function EditableName({ data, update }) {
   );
 }
 
-function AddTaskForm({ onAdd, onCancel }) {
-  const [name, setName] = useState("");
-  const [xp, setXp] = useState(10);
-  const [cat, setCat] = useState("casa");
+function TaskForm({ initial, onCancel, onSave }) {
+  const [name, setName] = useState(initial?.name || "");
+  const [desc, setDesc] = useState(initial?.desc || "");
+  const [xp, setXp] = useState(initial?.xp || 10);
+  const [cat, setCat] = useState(initial?.category || "casa");
+  const [days, setDays] = useState(initial?.days || []);
+  const WD = [["Dom", 0], ["Seg", 1], ["Ter", 2], ["Qua", 3], ["Qui", 4], ["Sex", 5], ["Sáb", 6]];
+  const toggleDay = (n) => setDays((d) => (d.includes(n) ? d.filter((x) => x !== n) : [...d, n].sort((a, b) => a - b)));
+  const cats = Object.entries(CATS).filter(([k]) => k !== "saude");
+  const submit = () => {
+    if (!name.trim()) return;
+    const t = { ...(initial || {}), id: initial?.id || "c_" + Math.random().toString(36).slice(2), name: name.trim(), desc: desc.trim(), xp, category: cat };
+    if (days.length) t.days = days; else delete t.days;
+    onSave(t);
+  };
   return (
     <Panel>
-      <div style={{ color: C.ink }} className="font-serif font-bold mb-2">Nova missão</div>
+      <div style={{ color: C.ink }} className="font-serif font-bold mb-2">{initial ? "Editar missão" : "Nova missão"}</div>
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome da missão"
         style={{ borderColor: C.goldDeep, color: C.ink }} className="mb-2 w-full rounded-xl border-2 bg-white/60 px-3 py-2 outline-none" />
+      <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Descrição (opcional)"
+        style={{ borderColor: C.goldDeep, color: C.ink }} className="mb-2 w-full rounded-xl border-2 bg-white/60 px-3 py-2 outline-none" />
       <div className="mb-2 flex gap-2">
-        {Object.entries(CATS).map(([k, v]) => (
+        {cats.map(([k, v]) => (
           <button key={k} onClick={() => setCat(k)} style={{ background: cat === k ? v.color : "rgba(0,0,0,.06)", color: cat === k ? "#fff" : C.ink }}
             className="flex-1 rounded-xl py-2 text-sm font-bold">{v.emoji} {v.label}</button>
         ))}
       </div>
-      <div className="mb-3 flex items-center gap-2">
+      <div className="mb-2 flex items-center gap-2">
         <span style={{ color: C.ink }} className="text-sm font-bold">XP:</span>
         {[5, 10, 15, 20].map((n) => (
           <button key={n} onClick={() => setXp(n)} style={{ background: xp === n ? C.xpDeep : "rgba(0,0,0,.06)", color: xp === n ? "#fff" : C.ink }}
             className="flex-1 rounded-lg py-1.5 text-sm font-bold">{n}</button>
         ))}
       </div>
+      <div className="mb-3">
+        <div style={{ color: C.inkSoft }} className="mb-1 text-xs font-bold">Dias da semana (vazio = todo dia)</div>
+        <div className="flex gap-1">
+          {WD.map(([lbl, n]) => (
+            <button key={n} onClick={() => toggleDay(n)} style={{ background: days.includes(n) ? C.gold : "rgba(0,0,0,.06)", color: days.includes(n) ? C.ink : C.inkSoft }}
+              className="flex-1 rounded-lg py-1.5 text-[11px] font-bold">{lbl}</button>
+          ))}
+        </div>
+      </div>
       <div className="flex gap-2">
         <button onClick={onCancel} style={{ color: C.inkSoft }} className="flex-1 rounded-xl py-2 text-sm font-bold">Cancelar</button>
-        <button onClick={() => { if (name.trim()) onAdd({ id: "c_" + Math.random().toString(36).slice(2), name: name.trim(), desc: "Missão pessoal", xp, category: cat }); }}
-          style={{ background: C.xpDeep, color: "#fff" }} className="flex-1 rounded-xl py-2 text-sm font-bold">Adicionar</button>
+        <button onClick={submit} style={{ background: C.xpDeep, color: "#fff" }} className="flex-1 rounded-xl py-2 text-sm font-bold">Salvar</button>
       </div>
     </Panel>
   );
@@ -955,7 +1040,7 @@ function Mona({ data, petStage, petSad }) {
 }
 
 /* ---------- SAÚDE (cuidando de você) ---------- */
-function HealthRow({ t, done, onToggle, onDelete }) {
+function HealthRow({ t, done, onToggle, onDelete, icon: Icon = Pill }) {
   return (
     <div className="flex items-center gap-2">
       <button onClick={onToggle}
@@ -963,17 +1048,17 @@ function HealthRow({ t, done, onToggle, onDelete }) {
         className="flex flex-1 items-center gap-3 rounded-2xl p-3 text-left active:scale-[.98] transition">
         <span style={{ background: done ? C.xp : "transparent", border: `2px solid ${done ? C.xpDeep : C.inkSoft}`, color: "#fff" }}
           className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg">
-          {done ? <Check size={18} strokeWidth={3} /> : <Pill size={15} style={{ color: C.inkSoft }} />}
+          {done ? <Check size={18} strokeWidth={3} /> : <Icon size={15} style={{ color: C.inkSoft }} />}
         </span>
         <span className="min-w-0 flex-1">
           <span style={{ color: C.ink, textDecoration: done ? "line-through" : "none", opacity: done ? 0.6 : 1 }}
             className="block font-bold leading-tight">{t.name}</span>
-          <span style={{ color: C.inkSoft }} className="block text-xs">{t.desc}</span>
+          {t.desc ? <span style={{ color: C.inkSoft }} className="block text-xs">{t.desc}</span> : null}
         </span>
         <Tag color={C.xpDeep}>+{t.xp} XP</Tag>
       </button>
       {onDelete && (
-        <button onClick={onDelete} style={{ color: C.inkSoft }} className="p-1 active:scale-90 transition"><Trash2 size={16} /></button>
+        <button onClick={onDelete} style={{ color: C.ember }} className="p-1 active:scale-90 transition"><Trash2 size={16} /></button>
       )}
     </div>
   );
@@ -1006,52 +1091,94 @@ function AddMedForm({ period, onCancel, onAdd }) {
   );
 }
 
-function CounterCard({ icon: Icon, label, sub, count, goal, color, onInc, onDec }) {
-  const pct = Math.min(100, Math.round((count / goal) * 100));
+function WaterCard({ cups, goalCups, goalL, onAdd, onSetGoal }) {
+  const liters = (cups * CUP_ML) / 1000;
+  const pct = Math.min(100, Math.round((cups / goalCups) * 100));
+  const fmt = (n) => String(n).replace(".", ",");
   return (
     <Panel>
       <div className="flex items-center gap-3">
-        <span style={{ background: color }} className="flex h-10 w-10 items-center justify-center rounded-xl text-white"><Icon size={20} /></span>
+        <span style={{ background: "#3a8fd8" }} className="flex h-10 w-10 items-center justify-center rounded-xl text-white"><Droplet size={20} /></span>
         <div className="flex-1">
-          <div style={{ color: C.ink }} className="font-bold leading-tight">{label}</div>
-          <div style={{ color: C.inkSoft }} className="text-xs">{sub}</div>
+          <div style={{ color: C.ink }} className="font-bold leading-tight">Hidratação</div>
+          <div style={{ color: C.inkSoft }} className="text-xs">{cups} copos de 250 ml</div>
         </div>
-        <button onClick={onDec} style={{ borderColor: C.goldDeep, color: C.inkSoft }}
+        <button onClick={() => onAdd(-1)} style={{ borderColor: C.goldDeep, color: C.inkSoft }}
           className="flex h-9 w-9 items-center justify-center rounded-full border-2 active:scale-90 transition"><Minus size={16} /></button>
-        <span style={{ color: C.ink }} className="w-10 text-center font-serif text-xl font-black">{count}</span>
-        <button onClick={onInc} style={{ background: color, color: "#fff" }}
+        <span style={{ color: C.ink }} className="w-16 text-center font-serif text-lg font-black">{fmt(liters.toFixed(2))} L</span>
+        <button onClick={() => onAdd(1)} style={{ background: "#3a8fd8", color: "#fff" }}
           className="flex h-9 w-9 items-center justify-center rounded-full active:scale-90 transition"><Plus size={18} /></button>
       </div>
       <div className="mt-3">
-        <div className="mb-1 flex justify-between text-xs font-bold" style={{ color: C.ink }}><span>Meta de hoje</span><span>{count}/{goal}</span></div>
+        <div className="mb-1 flex justify-between text-xs font-bold" style={{ color: C.ink }}><span>Meta: {fmt(goalL)} L</span><span>{fmt(liters.toFixed(2))}/{fmt(goalL)} L</span></div>
         <div style={{ background: "rgba(58,42,24,.18)" }} className="h-3 w-full overflow-hidden rounded-full">
-          <div style={{ width: `${pct}%`, background: color, transition: "width .5s" }} className="h-full rounded-full" />
+          <div style={{ width: `${pct}%`, background: "#3a8fd8", transition: "width .5s" }} className="h-full rounded-full" />
         </div>
+      </div>
+      <div className="mt-3 flex items-center gap-1">
+        <span style={{ color: C.inkSoft }} className="text-[11px] font-bold">Meta diária:</span>
+        {[2, 2.5, 3, 3.5].map((l) => (
+          <button key={l} onClick={() => onSetGoal(l)} style={{ background: goalL === l ? "#3a8fd8" : "rgba(0,0,0,.06)", color: goalL === l ? "#fff" : C.ink }}
+            className="flex-1 rounded-lg py-1 text-[11px] font-bold">{fmt(l)}L</button>
+        ))}
       </div>
     </Panel>
   );
 }
 
-function Saude({ data, incCounter, toggleTask, update, medDone }) {
-  const [addP, setAddP] = useState(null);
+function MealForm({ onCancel, onAdd }) {
+  const [name, setName] = useState("");
+  const [xp, setXp] = useState(6);
+  return (
+    <Panel style={{ borderColor: "#e08a3c" }}>
+      <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Nova refeição</div>
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex.: Pré-treino, ceia…"
+        style={{ borderColor: C.goldDeep, color: C.ink }} className="mb-2 w-full rounded-xl border-2 bg-white/60 px-3 py-2 outline-none" />
+      <div className="mb-3 flex items-center gap-2">
+        <span style={{ color: C.ink }} className="text-sm font-bold">XP:</span>
+        {[3, 5, 8, 10].map((n) => (
+          <button key={n} onClick={() => setXp(n)} style={{ background: xp === n ? C.xpDeep : "rgba(0,0,0,.06)", color: xp === n ? "#fff" : C.ink }}
+            className="flex-1 rounded-lg py-1.5 text-sm font-bold">{n}</button>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <button onClick={onCancel} style={{ color: C.inkSoft }} className="flex-1 rounded-xl py-2 text-sm font-bold">Cancelar</button>
+        <button onClick={() => { if (name.trim()) onAdd({ name: name.trim(), xp }); }}
+          style={{ background: "#e08a3c", color: "#fff" }} className="flex-1 rounded-xl py-2 text-sm font-bold">Adicionar</button>
+      </div>
+    </Panel>
+  );
+}
+
+function Saude({ data, addWater, toggleTask, update, medDone }) {
+  const [addP, setAddP] = useState(null);    // 'manha' | 'noite' (remédios)
+  const [addingMeal, setAddingMeal] = useState(false);
+  const [editHealth, setEditHealth] = useState(false);
   const today = dayKey();
-  const water = data.water && data.water.date === today ? data.water.count : 0;
-  const meals = data.meals && data.meals.date === today ? data.meals.count : 0;
-  const customMeds = data.customMeds || [];
-  const morning = [...HEALTH_TASKS.filter((t) => t.period === "manha"), ...customMeds.filter((m) => m.period === "manha")];
-  const night = [...HEALTH_TASKS.filter((t) => t.period === "noite"), ...customMeds.filter((m) => m.period === "noite")];
-  const allMeds = [...HEALTH_TASKS, ...customMeds];
-  const medsDone = allMeds.filter((m) => data.doneToday.includes(m.id)).length;
-  const medFrac = allMeds.length ? medsDone / allMeds.length : 1;
-  const vit = Math.round(((medFrac + Math.min(1, water / WATER_GOAL) + Math.min(1, meals / MEAL_GOAL)) / 3) * 100);
+  const meds = data.meds || [];
+  const meals = Array.isArray(data.meals) ? data.meals : [];
+  const cups = data.water && data.water.date === today ? data.water.count : 0;
+  const goalL = data.waterGoalL || WATER_GOAL_L_DEFAULT;
+  const goalCups = cupsForLiters(goalL);
+  const morning = meds.filter((m) => m.period === "manha");
+  const night = meds.filter((m) => m.period === "noite");
+
+  const medsDone = meds.filter((m) => data.doneToday.includes(m.id)).length;
+  const mealsDone = meals.filter((m) => data.doneToday.includes(m.id)).length;
+  const fracs = [Math.min(1, cups / goalCups)];
+  if (meds.length) fracs.push(medsDone / meds.length);
+  if (meals.length) fracs.push(mealsDone / meals.length);
+  const vit = Math.round((fracs.reduce((a, b) => a + b, 0) / fracs.length) * 100);
 
   const addMed = (period, m) => {
-    update({ customMeds: [...customMeds, { id: "m_" + Math.random().toString(36).slice(2), name: m.name, desc: m.dose, xp: m.xp, category: "saude", period, med: true, custom: true }] });
+    update({ meds: [...meds, { id: "m_" + Math.random().toString(36).slice(2), name: m.name, desc: m.dose, xp: m.xp, category: "saude", period, med: true }] });
     setAddP(null);
   };
-  const removeMed = (id) => update({ customMeds: customMeds.filter((m) => m.id !== id), doneToday: data.doneToday.filter((x) => x !== id) });
+  const removeMed = (id) => update({ meds: meds.filter((m) => m.id !== id), doneToday: data.doneToday.filter((x) => x !== id) });
+  const addMeal = (m) => { update({ meals: [...meals, { id: "meal_" + Math.random().toString(36).slice(2), name: m.name, xp: m.xp }] }); setAddingMeal(false); };
+  const removeMeal = (id) => update({ meals: meals.filter((m) => m.id !== id), doneToday: data.doneToday.filter((x) => x !== id) });
 
-  const AddButton = ({ period }) => (
+  const AddMedButton = ({ period }) => (
     <button onClick={() => setAddP(period)} style={{ borderColor: "#34b3a0", color: C.parch }}
       className="flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed py-2.5 text-sm font-bold active:scale-95 transition">
       <Plus size={16} /> Adicionar remédio
@@ -1080,26 +1207,42 @@ function Saude({ data, incCounter, toggleTask, update, medDone }) {
         </div>
       </Panel>
 
-      {/* manhã */}
+      {/* botão editar refeições/remédios */}
+      <div className="flex justify-end px-1">
+        <button onClick={() => setEditHealth((e) => !e)} style={{ color: editHealth ? C.gold : C.parch2 }} className="flex items-center gap-1 text-xs font-bold">
+          <Pencil size={14} /> {editHealth ? "Pronto" : "Editar lista"}
+        </button>
+      </div>
+
+      {/* manhã (remédios) */}
       <div style={{ color: C.parch }} className="flex items-center gap-2 px-1 font-serif text-lg font-bold"><Sun size={20} /> Manhã</div>
       {morning.map((t) => (
-        <HealthRow key={t.id} t={t} done={data.doneToday.includes(t.id)} onToggle={() => toggleTask(t)} onDelete={t.custom ? () => removeMed(t.id) : undefined} />
+        <HealthRow key={t.id} t={t} done={data.doneToday.includes(t.id)} onToggle={() => toggleTask(t)} onDelete={editHealth ? () => removeMed(t.id) : undefined} />
       ))}
-      {addP === "manha" ? <AddMedForm period="manha" onCancel={() => setAddP(null)} onAdd={(m) => addMed("manha", m)} /> : <AddButton period="manha" />}
+      {addP === "manha" ? <AddMedForm period="manha" onCancel={() => setAddP(null)} onAdd={(m) => addMed("manha", m)} /> : <AddMedButton period="manha" />}
 
-      {/* ao longo do dia */}
-      <div style={{ color: C.parch }} className="px-1 font-serif text-lg font-bold">Ao longo do dia</div>
-      <CounterCard icon={Droplet} label="Beber água" sub={`Meta: ${WATER_GOAL} copos`} count={water} goal={WATER_GOAL} color="#3a8fd8"
-        onInc={() => incCounter("water", 1, 2)} onDec={() => incCounter("water", -1, 2)} />
-      <CounterCard icon={Utensils} label="Refeições" sub="Comer de 3 em 3 horas" count={meals} goal={MEAL_GOAL} color="#e08a3c"
-        onInc={() => incCounter("meals", 1, 3)} onDec={() => incCounter("meals", -1, 3)} />
+      {/* refeições nomeadas */}
+      <div style={{ color: C.parch }} className="flex items-center gap-2 px-1 font-serif text-lg font-bold"><Utensils size={20} /> Refeições</div>
+      {meals.map((m) => (
+        <HealthRow key={m.id} t={m} icon={Utensils} done={data.doneToday.includes(m.id)} onToggle={() => toggleTask({ ...m, category: "saude" })} onDelete={editHealth ? () => removeMeal(m.id) : undefined} />
+      ))}
+      {addingMeal ? <MealForm onCancel={() => setAddingMeal(false)} onAdd={addMeal} /> : (
+        <button onClick={() => setAddingMeal(true)} style={{ borderColor: "#e08a3c", color: C.parch }}
+          className="flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed py-2.5 text-sm font-bold active:scale-95 transition">
+          <Plus size={16} /> Adicionar refeição
+        </button>
+      )}
 
-      {/* noite */}
+      {/* hidratação */}
+      <div style={{ color: C.parch }} className="flex items-center gap-2 px-1 font-serif text-lg font-bold"><Droplet size={20} /> Hidratação</div>
+      <WaterCard cups={cups} goalCups={goalCups} goalL={goalL} onAdd={addWater} onSetGoal={(l) => update({ waterGoalL: l })} />
+
+      {/* noite (remédios) */}
       <div style={{ color: C.parch }} className="flex items-center gap-2 px-1 font-serif text-lg font-bold"><Moon size={20} /> Noite</div>
       {night.map((t) => (
-        <HealthRow key={t.id} t={t} done={data.doneToday.includes(t.id)} onToggle={() => toggleTask(t)} onDelete={t.custom ? () => removeMed(t.id) : undefined} />
+        <HealthRow key={t.id} t={t} done={data.doneToday.includes(t.id)} onToggle={() => toggleTask(t)} onDelete={editHealth ? () => removeMed(t.id) : undefined} />
       ))}
-      {addP === "noite" ? <AddMedForm period="noite" onCancel={() => setAddP(null)} onAdd={(m) => addMed("noite", m)} /> : <AddButton period="noite" />}
+      {addP === "noite" ? <AddMedForm period="noite" onCancel={() => setAddP(null)} onAdd={(m) => addMed("noite", m)} /> : <AddMedButton period="noite" />}
 
       {medDone && (
         <Panel style={{ background: "#eef7ed", borderColor: C.xpDeep }}>
@@ -1201,20 +1344,6 @@ function Stats({ data, level, playerClass, sound, update, onSignOut }) {
       {/* chefes */}
       <BossList data={data} />
 
-      {/* missões personalizadas */}
-      {data.customTasks.length > 0 && (
-        <Panel>
-          <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Suas missões</div>
-          {data.customTasks.map((t) => (
-            <div key={t.id} className="flex items-center justify-between py-1 text-sm" style={{ color: C.ink }}>
-              <span>{CATS[t.category].emoji} {t.name}</span>
-              <button onClick={() => update({ customTasks: data.customTasks.filter((x) => x.id !== t.id), doneToday: data.doneToday.filter((id) => id !== t.id) })}
-                style={{ color: C.ember }}><Trash2 size={16} /></button>
-            </div>
-          ))}
-        </Panel>
-      )}
-
       {/* ajustes */}
       <Panel>
         <button onClick={() => update({ soundOn: !data.soundOn })} className="flex w-full items-center justify-between">
@@ -1227,7 +1356,7 @@ function Stats({ data, level, playerClass, sound, update, onSignOut }) {
         </button>
       </Panel>
 
-      <button onClick={() => { if (confirm("Recomeçar a aventura do zero? Tudo será apagado.")) { update({ ...DEFAULT_DATA }); } }}
+      <button onClick={() => { if (confirm("Recomeçar a aventura do zero? Tudo será apagado.")) { update(freshData()); } }}
         style={{ color: C.ember }} className="w-full py-2 text-xs font-bold">Recomeçar aventura</button>
 
       <button onClick={onSignOut} style={{ color: C.parch }}

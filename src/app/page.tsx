@@ -75,11 +75,11 @@ function Login() {
         className="w-full max-w-sm rounded-2xl p-6 text-center"
       >
         <div className="text-5xl">⚔️</div>
-        <h1 style={{ color: INK }} className="mt-2 font-serif text-2xl font-black">
-          RPG da Vida
+        <h1 style={{ color: INK }} className="mt-2 font-serif text-3xl font-black tracking-tight">
+          Ques<span style={{ color: GOLD_DEEP }}>TAH</span>
         </h1>
         <p style={{ color: INK_SOFT }} className="mt-1 text-sm">
-          Transforme sua rotina numa aventura. Entre com seu e-mail — enviamos um link mágico, sem senha.
+          Sua rotina vira aventura. Feito para mentes com TDAH. Entre com seu e-mail — link mágico, sem senha.
         </p>
 
         {status === "sent" ? (
