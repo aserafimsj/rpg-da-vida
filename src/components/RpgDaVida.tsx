@@ -3,6 +3,7 @@
 "use client";
 import React, { useState, useEffect, useRef } from "react";
 import { getSupabase } from "@/lib/supabaseClient";
+import { getDeferred, subscribe as subscribeInstall, doInstall, isStandalone, isIOS } from "@/lib/pwa";
 import { loadSave, persistSave } from "@/lib/save";
 import {
   Sword, Store, Heart, BarChart3, Crown, Flame,
@@ -762,34 +763,28 @@ function Tag({ children, color }) {
 }
 
 /* ---------- AVENTURA (tela principal) ---------- */
+function useInstallState() {
+  const [, force] = useState(0);
+  useEffect(() => subscribeInstall(() => force((x) => x + 1)), []);
+  return { canInstall: !!getDeferred(), ios: isIOS(), standalone: isStandalone(), install: doInstall };
+}
+
 function InstallHint() {
-  const [evt, setEvt] = useState(null);
+  const { canInstall, ios, standalone, install } = useInstallState();
   const [dismissed, setDismissed] = useState(false);
-  const [isIOS, setIsIOS] = useState(false);
-  const [standalone, setStandalone] = useState(true);
-  useEffect(() => {
-    const handler = (e) => { e.preventDefault(); setEvt(e); };
-    window.addEventListener("beforeinstallprompt", handler);
-    const ua = navigator.userAgent || "";
-    setIsIOS(/iphone|ipad|ipod/i.test(ua));
-    const sa = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
-    setStandalone(sa);
-    return () => window.removeEventListener("beforeinstallprompt", handler);
-  }, []);
   if (standalone || dismissed) return null;
-  if (!evt && !isIOS) return null;
+  if (!canInstall && !ios) return null;
   return (
     <Panel style={{ background: C.night2, borderColor: C.gold }} className="mb-3">
       <div className="flex items-center gap-2">
         <span className="text-2xl">📲</span>
         <div className="flex-1 text-sm" style={{ color: C.parch }}>
-          {isIOS && !evt
+          {ios && !canInstall
             ? <>Instale o QuesTAH: toque em <b>Compartilhar</b> e depois <b>Adicionar à Tela de Início</b>.</>
             : <>Instale o QuesTAH na tela inicial e jogue como um app de verdade.</>}
         </div>
-        {evt && (
-          <button onClick={async () => { evt.prompt(); try { await evt.userChoice; } catch (e) {} setEvt(null); }}
-            style={{ background: C.gold, color: C.ink }} className="rounded-xl px-3 py-1.5 text-sm font-bold active:scale-95 transition">Instalar</button>
+        {canInstall && (
+          <button onClick={install} style={{ background: C.gold, color: C.ink }} className="rounded-xl px-3 py-1.5 text-sm font-bold active:scale-95 transition">Instalar</button>
         )}
         <button onClick={() => setDismissed(true)} style={{ color: C.parch2 }} className="p-1"><X size={16} /></button>
       </div>
@@ -1846,6 +1841,8 @@ function Stats({ data, level, playerClass, sound, update, onSignOut, user }) {
         <p style={{ color: C.inkSoft }} className="mt-2 text-xs">Para quem quer mais adrenalina: missões não feitas custam XP (o mesmo que valiam). Sempre opcional.</p>
       </Panel>
 
+      <InstallSection />
+
       <AccountPanel user={user} />
 
       <button onClick={() => { if (confirm("Recomeçar a aventura do zero? Tudo será apagado.")) { update(freshData()); } }}
@@ -1856,6 +1853,40 @@ function Stats({ data, level, playerClass, sound, update, onSignOut, user }) {
         <LogOut size={16} /> Sair da conta
       </button>
     </div>
+  );
+}
+
+function InstallSection() {
+  const { canInstall, ios, standalone, install } = useInstallState();
+
+  if (standalone) {
+    return (
+      <Panel>
+        <div style={{ color: C.ink }} className="flex items-center gap-2 font-bold">📲 App instalado ✅</div>
+        <p style={{ color: C.inkSoft }} className="mt-1 text-sm">Você já está jogando pelo app instalado. Boa, herói!</p>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel style={{ borderColor: C.gold }}>
+      <div style={{ color: C.ink }} className="flex items-center gap-2 font-bold">📲 Instalar o QuesTAH</div>
+      <p style={{ color: C.inkSoft }} className="mt-1 mb-2 text-sm">
+        Coloque o QuesTAH na tela inicial e ele abre como um app de verdade (em tela cheia e funcionando offline).
+      </p>
+      {canInstall ? (
+        <button onClick={install} style={{ background: C.gold, color: C.ink }}
+          className="w-full rounded-xl py-2.5 font-serif font-bold active:scale-95 transition">Instalar agora</button>
+      ) : ios ? (
+        <div style={{ color: C.inkSoft }} className="text-sm">
+          No iPhone/iPad: toque em <b>Compartilhar</b> (o quadradinho com a seta ↑) e depois em <b>Adicionar à Tela de Início</b>.
+        </div>
+      ) : (
+        <div style={{ color: C.inkSoft }} className="text-sm">
+          No menu do navegador (⋮), procure por <b>Instalar app</b> ou <b>Adicionar à tela inicial</b>. Se não aparecer, recarregue a página e tente de novo.
+        </div>
+      )}
+    </Panel>
   );
 }
 
