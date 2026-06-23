@@ -4,6 +4,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { getSupabase } from "@/lib/supabaseClient";
 import { getDeferred, subscribe as subscribeInstall, doInstall, isStandalone, isIOS } from "@/lib/pwa";
+import RoutineDefense from "./RoutineDefense";
 import { loadSave, persistSave } from "@/lib/save";
 import {
   Sword, Store, Heart, BarChart3, Crown, Flame,
@@ -107,6 +108,7 @@ const BOSSES = [
 /* ---------- Gemas (moeda de cosméticos) ---------- */
 const GEMS_PER_LEVEL = 5;     // ao subir de nível
 const GEMS_DAY_BONUS = 10;    // ao fechar todas as missões do dia
+const GAME_GEM_DAILY_CAP = 10; // teto de gemas/dia vindas do mini-game
 
 /* ---------- Energia do Pet (estilo Pou) ---------- */
 const ENERGY_DECAY_PER_HOUR = 1.4;   // ~33/dia (ritmo médio: ~3 dias para esvaziar)
@@ -300,6 +302,8 @@ const DEFAULT_DATA = {
   petEnergyTs: Date.now(),
   hardMode: false,
   hardPenaltyNote: null,
+  gameBest: 0,
+  gameGemsToday: null,
   dayBonusDate: null,
   water: { date: dayKey(), count: 0 },          // count = copos de 250 ml
   waterScored: { date: dayKey(), cups: 0 },      // anti-farm da água
@@ -379,6 +383,7 @@ export default function RpgDaVida({ user, onSignOut }) {
   const [bossBanner, setBossBanner] = useState(null);
   const [focusMode, setFocusMode] = useState(false);
   const [quickOnly, setQuickOnly] = useState(false);
+  const [showGame, setShowGame] = useState(false);
   const [toast, setToast] = useState(null);
   const sound = useSound();
   const saveTimer = useRef(null);
@@ -412,6 +417,7 @@ export default function RpgDaVida({ user, onSignOut }) {
         if (!d.cosmetics || typeof d.cosmetics !== "object") d.cosmetics = { owned: [], equipped: {} };
         if (typeof d.petEnergy !== "number") { d.petEnergy = 100; d.petEnergyTs = Date.now(); }
         if (typeof d.hardMode !== "boolean") d.hardMode = false;
+        if (typeof d.gameBest !== "number") d.gameBest = 0;
       }
       delete d.customTasks; delete d.customMeds;
 
@@ -607,6 +613,21 @@ export default function RpgDaVida({ user, onSignOut }) {
     showToast(`${item.emoji} ${item.name} comprado!`);
   };
 
+  // recompensa do mini-game: gemas = ondas limpas, com teto diário
+  const endGame = (wavesCleared) => {
+    const today = dayKey();
+    const g = (data.gameGemsToday && data.gameGemsToday.date === today) ? data.gameGemsToday : { date: today, earned: 0 };
+    const remaining = Math.max(0, GAME_GEM_DAILY_CAP - g.earned);
+    const award = Math.max(0, Math.min(wavesCleared, remaining));
+    update({
+      gems: (data.gems || 0) + award,
+      gameGemsToday: { date: today, earned: g.earned + award },
+      gameBest: Math.max(data.gameBest || 0, wavesCleared),
+    });
+    if (award > 0 && data.soundOn) sound.coin();
+    return award;
+  };
+
   /* ---------- água em copos de 250ml (XP só até a meta, sem farm) ---------- */
   const addWater = (delta) => {
     setData((prev) => {
@@ -710,7 +731,8 @@ export default function RpgDaVida({ user, onSignOut }) {
         <InstallHint />
         {tab === "aventura" && (
           <Aventura {...{ data, level, xpInLevel, xpForNext, pct, playerClass, petStage, journeyStage,
-            visibleTasks, quickOnly, setQuickOnly, toggleTask, setFocusMode, pending, allTasks: todayTasks, update }} />
+            visibleTasks, quickOnly, setQuickOnly, toggleTask, setFocusMode, pending, allTasks: todayTasks, update,
+            openGame: () => setShowGame(true) }} />
         )}
         {tab === "loja" && <Loja data={data} buyReward={buyReward} buyCosmetic={buyCosmetic} update={update} />}
         {tab === "pet" && <Pet data={data} petStage={petStage} petSad={petSad} petEnergy={petEnergy} update={update} />}
@@ -744,6 +766,15 @@ export default function RpgDaVida({ user, onSignOut }) {
           })}
         </div>
       </nav>
+
+      {showGame && (
+        <RoutineDefense
+          avatarSrc={level >= AVATAR_SUPREMO_LEVEL ? AVATAR_IMG.supremo : AVATAR_IMG.normal}
+          best={data.gameBest || 0}
+          onRunEnd={endGame}
+          onClose={() => setShowGame(false)}
+        />
+      )}
     </div>
   );
 }
@@ -793,7 +824,7 @@ function InstallHint() {
 }
 
 function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStage, journeyStage,
-  visibleTasks, quickOnly, setQuickOnly, toggleTask, setFocusMode, pending, allTasks, update }) {
+  visibleTasks, quickOnly, setQuickOnly, toggleTask, setFocusMode, pending, allTasks, update, openGame }) {
   const [adding, setAdding] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
@@ -844,6 +875,18 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
           <span className="flex items-center gap-1"><Flame size={16} style={{ color: C.ember }} /> {data.currentStreak} dias</span>
         </div>
       </Panel>
+
+      {/* mini-game */}
+      <button onClick={openGame}
+        style={{ background: `linear-gradient(160deg, ${C.night2}, ${C.night})`, border: `3px solid ${C.gold}`, boxShadow: "0 4px 0 rgba(0,0,0,.25)" }}
+        className="flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left active:scale-[.98] transition">
+        <span className="text-3xl">🎮</span>
+        <div className="flex-1">
+          <div style={{ color: C.parch }} className="font-serif font-black">Defesa da Rotina</div>
+          <div style={{ color: C.parch2 }} className="text-xs">Defenda a casa do Caos e ganhe gemas 💎</div>
+        </div>
+        <span style={{ color: C.gold }} className="text-xs font-bold">Recorde: {data.gameBest || 0}</span>
+      </button>
 
       {/* aviso de streak quebrada (gentil) */}
       {data.streakBrokenNote && (
