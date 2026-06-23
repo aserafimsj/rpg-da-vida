@@ -8,7 +8,7 @@ import {
   Sword, Store, Heart, BarChart3, Crown, Flame,
   Plus, Minus, Trash2, X, Target, Zap, Volume2, VolumeX, Coins, Check,
   Trophy, Skull, Droplet, Pill, Sun, Moon, Utensils, LogOut, Pencil,
-  Gem, PawPrint, Smile,
+  Gem, PawPrint, Smile, Mail,
 } from "lucide-react";
 
 /* ============================================================
@@ -367,8 +367,9 @@ function useSound() {
 }
 
 /* ============================================================ */
-export default function RpgDaVida({ userId, onSignOut }) {
+export default function RpgDaVida({ user, onSignOut }) {
   const supabase = getSupabase();
+  const userId = user.id;
   const [data, setData] = useState(null);
   const [tab, setTab] = useState("aventura");
   const [pops, setPops] = useState([]);        // popups flutuantes
@@ -705,6 +706,7 @@ export default function RpgDaVida({ userId, onSignOut }) {
 
       {/* conteúdo */}
       <main className="mx-auto w-full max-w-md px-4 pb-28 pt-4">
+        <InstallHint />
         {tab === "aventura" && (
           <Aventura {...{ data, level, xpInLevel, xpForNext, pct, playerClass, petStage, journeyStage,
             visibleTasks, quickOnly, setQuickOnly, toggleTask, setFocusMode, pending, allTasks: todayTasks, update }} />
@@ -714,7 +716,7 @@ export default function RpgDaVida({ userId, onSignOut }) {
         {tab === "avatar" && <Avatar data={data} level={level} journeyStage={journeyStage} petEnergy={petEnergy} update={update} />}
         {tab === "saude" && <Saude data={data} addWater={addWater} toggleTask={toggleTask} update={update}
           medDone={(() => { const ids = (data.meds || []).map((m) => m.id); return ids.length > 0 && ids.every((id) => data.doneToday.includes(id)); })()} />}
-        {tab === "stats" && <Stats data={data} level={level} playerClass={playerClass} sound={sound} update={update} onSignOut={onSignOut} />}
+        {tab === "stats" && <Stats data={data} level={level} playerClass={playerClass} sound={sound} update={update} onSignOut={onSignOut} user={user} />}
       </main>
 
       {/* navegação inferior */}
@@ -760,6 +762,41 @@ function Tag({ children, color }) {
 }
 
 /* ---------- AVENTURA (tela principal) ---------- */
+function InstallHint() {
+  const [evt, setEvt] = useState(null);
+  const [dismissed, setDismissed] = useState(false);
+  const [isIOS, setIsIOS] = useState(false);
+  const [standalone, setStandalone] = useState(true);
+  useEffect(() => {
+    const handler = (e) => { e.preventDefault(); setEvt(e); };
+    window.addEventListener("beforeinstallprompt", handler);
+    const ua = navigator.userAgent || "";
+    setIsIOS(/iphone|ipad|ipod/i.test(ua));
+    const sa = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+    setStandalone(sa);
+    return () => window.removeEventListener("beforeinstallprompt", handler);
+  }, []);
+  if (standalone || dismissed) return null;
+  if (!evt && !isIOS) return null;
+  return (
+    <Panel style={{ background: C.night2, borderColor: C.gold }} className="mb-3">
+      <div className="flex items-center gap-2">
+        <span className="text-2xl">📲</span>
+        <div className="flex-1 text-sm" style={{ color: C.parch }}>
+          {isIOS && !evt
+            ? <>Instale o QuesTAH: toque em <b>Compartilhar</b> e depois <b>Adicionar à Tela de Início</b>.</>
+            : <>Instale o QuesTAH na tela inicial e jogue como um app de verdade.</>}
+        </div>
+        {evt && (
+          <button onClick={async () => { evt.prompt(); try { await evt.userChoice; } catch (e) {} setEvt(null); }}
+            style={{ background: C.gold, color: C.ink }} className="rounded-xl px-3 py-1.5 text-sm font-bold active:scale-95 transition">Instalar</button>
+        )}
+        <button onClick={() => setDismissed(true)} style={{ color: C.parch2 }} className="p-1"><X size={16} /></button>
+      </div>
+    </Panel>
+  );
+}
+
 function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStage, journeyStage,
   visibleTasks, quickOnly, setQuickOnly, toggleTask, setFocusMode, pending, allTasks, update }) {
   const [adding, setAdding] = useState(false);
@@ -1732,7 +1769,7 @@ function BossList({ data }) {
 }
 
 /* ---------- STATS + CONQUISTAS + AJUSTES ---------- */
-function Stats({ data, level, playerClass, sound, update, onSignOut }) {
+function Stats({ data, level, playerClass, sound, update, onSignOut, user }) {
   const fav = Object.entries(data.catCounts).sort((a, b) => b[1] - a[1])[0];
   const favLabel = fav && fav[1] > 0 ? `${CATS[fav[0]].emoji} ${CATS[fav[0]].label}` : "—";
   const hours = ((data.tasksCompleted * 3) / 60).toFixed(1);
@@ -1809,6 +1846,8 @@ function Stats({ data, level, playerClass, sound, update, onSignOut }) {
         <p style={{ color: C.inkSoft }} className="mt-2 text-xs">Para quem quer mais adrenalina: missões não feitas custam XP (o mesmo que valiam). Sempre opcional.</p>
       </Panel>
 
+      <AccountPanel user={user} />
+
       <button onClick={() => { if (confirm("Recomeçar a aventura do zero? Tudo será apagado.")) { update(freshData()); } }}
         style={{ color: C.ember }} className="w-full py-2 text-xs font-bold">Recomeçar aventura</button>
 
@@ -1817,6 +1856,58 @@ function Stats({ data, level, playerClass, sound, update, onSignOut }) {
         <LogOut size={16} /> Sair da conta
       </button>
     </div>
+  );
+}
+
+function AccountPanel({ user }) {
+  const supabase = getSupabase();
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState("idle");
+  const [msg, setMsg] = useState("");
+  const hasEmail = !!(user && user.email);
+
+  const link = async () => {
+    if (!email.trim()) return;
+    setStatus("sending");
+    try {
+      const { error } = await supabase.auth.updateUser(
+        { email: email.trim() },
+        { emailRedirectTo: window.location.origin }
+      );
+      if (error) { setStatus("error"); setMsg(error.message); }
+      else { setStatus("sent"); }
+    } catch (e) {
+      setStatus("error"); setMsg("Não foi possível enviar agora. Tente de novo.");
+    }
+  };
+
+  if (hasEmail) {
+    return (
+      <Panel>
+        <div style={{ color: C.ink }} className="flex items-center gap-2 font-bold"><Mail size={16} /> Conta</div>
+        <p style={{ color: C.inkSoft }} className="mt-1 text-sm">Progresso salvo na nuvem em <b>{user.email}</b>. Sincroniza em qualquer aparelho. ✅</p>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel style={{ borderColor: C.gold }}>
+      <div style={{ color: C.ink }} className="flex items-center gap-2 font-bold"><Mail size={16} /> Salvar meu progresso</div>
+      <p style={{ color: C.inkSoft }} className="mt-1 mb-2 text-sm">
+        Você está jogando sem conta — o progresso fica só neste aparelho. Adicione seu e-mail para <b>salvar na nuvem</b> e jogar em qualquer lugar (sem perder nada do que já fez).
+      </p>
+      {status === "sent" ? (
+        <div style={{ color: C.xpDeep }} className="text-sm font-bold">📬 Enviamos um link de confirmação para <b>{email}</b>. Toque nele para concluir.</div>
+      ) : (
+        <>
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="seu@email.com"
+            style={{ borderColor: C.goldDeep, color: C.ink }} className="mb-2 w-full rounded-xl border-2 bg-white/70 px-3 py-2 outline-none" />
+          <button onClick={link} disabled={status === "sending"} style={{ background: C.gold, color: C.ink, opacity: status === "sending" ? 0.6 : 1 }}
+            className="w-full rounded-xl py-2 font-bold active:scale-95 transition">{status === "sending" ? "Enviando…" : "Salvar progresso"}</button>
+          {status === "error" && <p className="mt-2 text-sm" style={{ color: "#c0392b" }}>{msg}</p>}
+        </>
+      )}
+    </Panel>
   );
 }
 

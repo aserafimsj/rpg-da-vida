@@ -41,14 +41,29 @@ export default function Page() {
 
   if (!session) return <Login />;
 
-  return <RpgDaVida userId={session.user.id} onSignOut={() => supabase.auth.signOut()} />;
+  return <RpgDaVida user={session.user} onSignOut={() => supabase.auth.signOut()} />;
 }
 
 function Login() {
   const supabase = getSupabase();
+  const [mode, setMode] = useState<"home" | "email">("home");
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [msg, setMsg] = useState("");
+
+  const playNow = async () => {
+    setStatus("sending");
+    const { error } = await supabase.auth.signInAnonymously();
+    if (error) {
+      setStatus("error");
+      setMsg(
+        error.message?.toLowerCase().includes("anonymous")
+          ? "O acesso anônimo precisa ser ativado no Supabase (Authentication → Sign In / Providers → Anonymous)."
+          : error.message
+      );
+    }
+    // sucesso: o onAuthStateChange carrega o jogo
+  };
 
   const send = async () => {
     if (!email.trim()) return;
@@ -79,36 +94,63 @@ function Login() {
           Ques<span style={{ color: GOLD_DEEP }}>TAH</span>
         </h1>
         <p style={{ color: INK_SOFT }} className="mt-1 text-sm">
-          Sua rotina vira aventura. Feito para mentes com TDAH. Entre com seu e-mail — link mágico, sem senha.
+          Sua rotina vira aventura. Feito para mentes com TDAH.
         </p>
 
-        {status === "sent" ? (
-          <div style={{ color: XP_DEEP }} className="mt-5 font-bold">
-            📬 Link enviado! Confira seu e-mail (e o spam) e toque no link para entrar.
-          </div>
-        ) : (
+        {mode === "home" && (
           <>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") send(); }}
-              placeholder="seu@email.com"
-              style={{ borderColor: GOLD_DEEP, color: INK }}
-              className="mt-5 w-full rounded-xl border-2 bg-white/70 px-4 py-3 text-center outline-none"
-            />
             <button
-              onClick={send}
+              onClick={playNow}
               disabled={status === "sending"}
               style={{ background: GOLD, color: INK, opacity: status === "sending" ? 0.6 : 1 }}
-              className="mt-3 w-full rounded-xl py-3 font-serif font-black active:scale-95 transition"
+              className="mt-5 w-full rounded-xl py-3 font-serif text-lg font-black active:scale-95 transition"
             >
-              {status === "sending" ? "Enviando…" : "Receber link mágico"}
+              {status === "sending" ? "Entrando…" : "▶ Jogar agora"}
             </button>
-            {status === "error" && (
-              <p className="mt-3 text-sm" style={{ color: "#c0392b" }}>{msg}</p>
-            )}
+            <p style={{ color: INK_SOFT }} className="mt-2 text-xs">
+              Sem cadastro. Você adiciona seu e-mail depois, nas Configurações, para salvar o progresso.
+            </p>
+            <button
+              onClick={() => { setMode("email"); setStatus("idle"); }}
+              style={{ color: GOLD_DEEP }}
+              className="mt-4 text-sm font-bold underline"
+            >
+              Já tenho conta — entrar com e-mail
+            </button>
+            {status === "error" && <p className="mt-3 text-sm" style={{ color: "#c0392b" }}>{msg}</p>}
           </>
+        )}
+
+        {mode === "email" && (
+          status === "sent" ? (
+            <div style={{ color: XP_DEEP }} className="mt-5 font-bold">
+              📬 Link enviado! Confira seu e-mail (e o spam) e toque no link para entrar.
+            </div>
+          ) : (
+            <>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") send(); }}
+                placeholder="seu@email.com"
+                style={{ borderColor: GOLD_DEEP, color: INK }}
+                className="mt-5 w-full rounded-xl border-2 bg-white/70 px-4 py-3 text-center outline-none"
+              />
+              <button
+                onClick={send}
+                disabled={status === "sending"}
+                style={{ background: GOLD, color: INK, opacity: status === "sending" ? 0.6 : 1 }}
+                className="mt-3 w-full rounded-xl py-3 font-serif font-black active:scale-95 transition"
+              >
+                {status === "sending" ? "Enviando…" : "Receber link mágico"}
+              </button>
+              {status === "error" && (
+                <p className="mt-3 text-sm" style={{ color: "#c0392b" }}>{msg}</p>
+              )}
+              <button onClick={() => { setMode("home"); setStatus("idle"); }} style={{ color: INK_SOFT }} className="mt-4 text-sm font-bold">← Voltar</button>
+            </>
+          )
         )}
       </div>
     </main>
