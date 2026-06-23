@@ -1,4 +1,5 @@
 // @ts-nocheck
+/* eslint-disable @next/next/no-img-element */
 "use client";
 import React, { useState, useEffect, useRef } from "react";
 import { getSupabase } from "@/lib/supabaseClient";
@@ -106,6 +107,32 @@ const BOSSES = [
 const GEMS_PER_LEVEL = 5;     // ao subir de nível
 const GEMS_DAY_BONUS = 10;    // ao fechar todas as missões do dia
 
+/* ---------- Energia do Pet (estilo Pou) ---------- */
+const ENERGY_DECAY_PER_HOUR = 1.4;   // ~33/dia (ritmo médio: ~3 dias para esvaziar)
+const ENERGY_RECOVER_TASK = 8;       // por missão concluída
+const ENERGY_RECOVER_WATER = 2;      // por copo de água
+function currentEnergy(d) {
+  const now = Date.now();
+  const ts = d.petEnergyTs || now;
+  const hrs = Math.max(0, (now - ts) / 3600000);
+  const base = typeof d.petEnergy === "number" ? d.petEnergy : 100;
+  return Math.max(0, Math.min(100, base - ENERGY_DECAY_PER_HOUR * hrs));
+}
+function settleEnergy(d) {
+  d.petEnergy = currentEnergy(d);
+  d.petEnergyTs = Date.now();
+}
+function bumpEnergy(d, amt) {
+  settleEnergy(d);
+  d.petEnergy = Math.max(0, Math.min(100, d.petEnergy + amt));
+}
+function energyMood(e) {
+  if (e >= 70) return { label: "Cheio de energia", color: C.xp };
+  if (e >= 40) return { label: "De boa", color: C.gold };
+  if (e >= 15) return { label: "Com fome…", color: C.ember };
+  return { label: "Carente de carinho", color: "#c0392b" };
+}
+
 /* ---------- Mapa da jornada ---------- */
 const JOURNEY = [
   { name: "Vila do Caos", xp: 0, emoji: "🏚️" },
@@ -131,6 +158,27 @@ const PET_SPECIES = [
 ];
 const PET_COLORS = ["#ffffff", "#f4c542", "#e2a16f", "#b97a56", "#8a8f99", "#3a3a44", "#f6a5c0", "#9ad0c2"];
 const DEFAULT_PET = { name: "Mona", species: "gato", color: "#ffffff" };
+
+/* ---------- Ilustrações (imagens reais) ---------- */
+const IMG_SPECIES = ["gato"]; // espécies com ilustração pronta (sem cor/SVG)
+const CAT_IMG = {
+  feliz: "/pets/feliz.png",
+  realeza: "/pets/realeza.png",
+  sono: "/pets/sono.png",
+  triste: "/pets/triste.png",
+  brava: "/pets/brava.png",
+};
+const CAT_STAGE_IMG = ["sono", "feliz", "feliz", "realeza", "realeza"]; // por fase (na evolução)
+const AVATAR_IMG = { normal: "/avatar/normal.png", supremo: "/avatar/supremo.png" };
+const AVATAR_SUPREMO_LEVEL = 10;
+// Escolhe a imagem do gato pela energia (estilo Pou) e fase
+function catImageKey(energy, stageIndex) {
+  if (energy < 15) return "brava";
+  if (energy < 40) return "triste";
+  if (stageIndex >= 3) return "realeza";
+  if (energy < 70) return "sono";
+  return "feliz";
+}
 
 /* ---------- Avatar (camadas + desbloqueio por nível) ---------- */
 const SKIN_TONES = ["#f6d2b3", "#eebd96", "#d39b6e", "#a9714a", "#7a4f30", "#5a3825"];
@@ -247,6 +295,10 @@ const DEFAULT_DATA = {
   pet: { ...DEFAULT_PET },
   avatar: { ...DEFAULT_AVATAR },
   cosmetics: { owned: [], equipped: {} },
+  petEnergy: 100,
+  petEnergyTs: Date.now(),
+  hardMode: false,
+  hardPenaltyNote: null,
   dayBonusDate: null,
   water: { date: dayKey(), count: 0 },          // count = copos de 250 ml
   waterScored: { date: dayKey(), cups: 0 },      // anti-farm da água
@@ -278,6 +330,8 @@ function freshData() {
     avatar: { ...DEFAULT_AVATAR },
     cosmetics: { owned: [], equipped: {} },
     gems: 0,
+    petEnergy: 100,
+    petEnergyTs: Date.now(),
   };
 }
 
@@ -354,12 +408,26 @@ export default function RpgDaVida({ userId, onSignOut }) {
         if (!d.pet || typeof d.pet !== "object") d.pet = { ...DEFAULT_PET };
         if (!d.avatar || typeof d.avatar !== "object") d.avatar = { ...DEFAULT_AVATAR };
         if (!d.cosmetics || typeof d.cosmetics !== "object") d.cosmetics = { owned: [], equipped: {} };
+        if (typeof d.petEnergy !== "number") { d.petEnergy = 100; d.petEnergyTs = Date.now(); }
+        if (typeof d.hardMode !== "boolean") d.hardMode = false;
       }
       delete d.customTasks; delete d.customMeds;
 
       // reset diário
       const today = dayKey();
       if (d.lastResetDate !== today) {
+        // Modo Difícil: penaliza missões não feitas no dia que está fechando
+        if (d.hardMode && d.lastResetDate) {
+          const prevDow = new Date(`${d.lastResetDate}T12:00:00`).getDay();
+          const prevActive = (d.tasks || []).filter((t) => !t.days || t.days.includes(prevDow));
+          const missed = prevActive.filter((t) => !d.doneToday.includes(t.id));
+          const penalty = missed.reduce((s, t) => s + (t.xp || 0), 0);
+          if (penalty > 0) {
+            d.xpTotal = Math.max(0, d.xpTotal - penalty);
+            d.gold = Math.max(0, d.gold - penalty);
+            d.hardPenaltyNote = penalty;
+          }
+        }
         d.doneToday = [];
         d.lastResetDate = today;
         d.water = { date: today, count: 0 };
@@ -405,7 +473,8 @@ export default function RpgDaVida({ userId, onSignOut }) {
   const playerClass = getPlayerClass(data.catCounts, data.tasksCompleted, level);
   const petStage = stageFor(PET_STAGES, data.xpTotal);
   const journeyStage = stageFor(JOURNEY, data.xpTotal);
-  const petSad = data.lastActiveDate && data.lastActiveDate !== dayKey() && data.lastActiveDate !== yesterdayKey();
+  const petEnergy = currentEnergy(data);
+  const petSad = petEnergy < 40;
 
   const statsSnap = {
     tasksCompleted: data.tasksCompleted, level, xpTotal: data.xpTotal,
@@ -449,6 +518,8 @@ export default function RpgDaVida({ userId, onSignOut }) {
           if (task.key) d.taskCounts = { ...d.taskCounts, [task.key]: (d.taskCounts[task.key] || 0) + 1 };
 
           markActive(d);
+          bumpEnergy(d, ENERGY_RECOVER_TASK);
+          d.hardPenaltyNote = null;
 
           // remédios do dia completos?
           const medIds = (d.meds || []).map((m) => m.id);
@@ -552,6 +623,7 @@ export default function RpgDaVida({ userId, onSignOut }) {
           d.xpTotal += WATER_XP; d.gold += WATER_XP;
           d.waterScored = { date: today, cups: next };
           markActive(d);
+          bumpEnergy(d, ENERGY_RECOVER_WATER);
           const newLevel = levelFromXp(d.xpTotal).level;
           if (newLevel > prevLevel) {
             d.gems = (d.gems || 0) + GEMS_PER_LEVEL * (newLevel - prevLevel);
@@ -638,8 +710,8 @@ export default function RpgDaVida({ userId, onSignOut }) {
             visibleTasks, quickOnly, setQuickOnly, toggleTask, setFocusMode, pending, allTasks: todayTasks, update }} />
         )}
         {tab === "loja" && <Loja data={data} buyReward={buyReward} buyCosmetic={buyCosmetic} update={update} />}
-        {tab === "pet" && <Pet data={data} petStage={petStage} petSad={petSad} update={update} />}
-        {tab === "avatar" && <Avatar data={data} level={level} journeyStage={journeyStage} update={update} />}
+        {tab === "pet" && <Pet data={data} petStage={petStage} petSad={petSad} petEnergy={petEnergy} update={update} />}
+        {tab === "avatar" && <Avatar data={data} level={level} journeyStage={journeyStage} petEnergy={petEnergy} update={update} />}
         {tab === "saude" && <Saude data={data} addWater={addWater} toggleTask={toggleTask} update={update}
           medDone={(() => { const ids = (data.meds || []).map((m) => m.id); return ids.length > 0 && ids.every((id) => data.doneToday.includes(id)); })()} />}
         {tab === "stats" && <Stats data={data} level={level} playerClass={playerClass} sound={sound} update={update} onSignOut={onSignOut} />}
@@ -750,6 +822,16 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
           </div>
         </Panel>
       )}
+
+      {/* aviso do Modo Difícil */}
+      {data.hardPenaltyNote ? (
+        <Panel style={{ background: "#2a0e12", borderColor: C.ember }}>
+          <div className="flex items-center justify-between gap-2 text-sm" style={{ color: C.parch }}>
+            <span className="flex items-center gap-2"><span className="text-xl">⚔️</span><span><b>Modo Difícil:</b> você perdeu <b>{data.hardPenaltyNote} XP</b> por missões de ontem. Cada dia é uma chance nova.</span></span>
+            <button onClick={() => update({ hardPenaltyNote: null })} style={{ color: C.parch2 }} className="p-1"><X size={16} /></button>
+          </div>
+        </Panel>
+      ) : null}
 
       {/* botões TDAH */}
       <div className="grid grid-cols-2 gap-3">
@@ -1188,7 +1270,25 @@ function PetAvatar({ size = 120, species = "gato", color = "#ffffff", sad = fals
   );
 }
 
-function Pet({ data, petStage, petSad, update }) {
+function PetDisplay({ data, energy = 100, stageIndex = 0, size = 150, imgKeyOverride = null }) {
+  const pet = data.pet || DEFAULT_PET;
+  const hat = cosmeticEmoji(data, "petHat");
+  const glasses = cosmeticEmoji(data, "petGlasses");
+  if (IMG_SPECIES.includes(pet.species)) {
+    const key = imgKeyOverride || catImageKey(energy, stageIndex);
+    return (
+      <div style={{ position: "relative", width: size, height: size }}>
+        <img src={CAT_IMG[key]} alt={pet.name}
+          style={{ width: size, height: size, objectFit: "contain", animation: energy >= 40 ? "float 3s ease-in-out infinite" : "none" }} />
+        {glasses && <span style={{ position: "absolute", top: size * 0.4, left: "50%", transform: "translateX(-50%)", fontSize: size * 0.16 }}>{glasses}</span>}
+        {hat && <span style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", fontSize: size * 0.26 }}>{hat}</span>}
+      </div>
+    );
+  }
+  return <PetAvatar size={size} species={pet.species} color={pet.color} sad={energy < 40} stageIndex={stageIndex} hat={hat} glasses={glasses} />;
+}
+
+function Pet({ data, petStage, petSad, petEnergy = 100, update }) {
   const pet = data.pet || DEFAULT_PET;
   const idx = PET_STAGES.indexOf(petStage);
   const next = PET_STAGES[idx + 1];
@@ -1196,11 +1296,21 @@ function Pet({ data, petStage, petSad, update }) {
   const setPet = (patch) => update({ pet: { ...pet, ...patch } });
   const [editingName, setEditingName] = useState(false);
   const [nameVal, setNameVal] = useState(pet.name);
+  const [, setTick] = useState(0);
+  useEffect(() => { const t = setInterval(() => setTick((x) => x + 1), 60000); return () => clearInterval(t); }, []);
+  const mood = energyMood(petEnergy);
+  const energyMsg = petEnergy >= 70
+    ? `${pet.name} está radiante e cheio de energia!`
+    : petEnergy >= 40
+      ? `${pet.name} está de boa — uma missão deixa tudo melhor.`
+      : petEnergy >= 15
+        ? `${pet.name} está com fome de atenção. Que tal uma missão? 🍽️`
+        : `${pet.name} sente muita saudade. Um passinho hoje já reanima. 💛`;
 
   return (
     <div className="space-y-4">
       <Panel style={{ background: `linear-gradient(160deg, #f0f7ff, ${C.parch2})` }} className="text-center">
-        <div className="flex justify-center"><PetAvatar size={150} species={pet.species} color={pet.color} sad={petSad} stageIndex={idx} hat={cosmeticEmoji(data, "petHat")} glasses={cosmeticEmoji(data, "petGlasses")} /></div>
+        <div className="flex justify-center"><PetDisplay data={data} energy={petEnergy} stageIndex={idx} size={170} /></div>
         {editingName ? (
           <input autoFocus value={nameVal} onChange={(e) => setNameVal(e.target.value)}
             onBlur={() => { setPet({ name: nameVal.trim() || "Pet" }); setEditingName(false); }}
@@ -1212,11 +1322,20 @@ function Pet({ data, petStage, petSad, update }) {
             className="mt-1 font-serif text-2xl font-black">{pet.name} ✎</button>
         )}
         <div style={{ color: C.rose }} className="font-bold">{petStage.name}</div>
-        <p style={{ color: C.inkSoft }} className="mt-2 text-sm">
-          {petSad ? `${pet.name} sente sua falta. Uma missão hoje já alegra — sem pressa, sem culpa. 💛` : `${pet.name} está feliz e evolui junto com você.`}
-        </p>
+
+        {/* energia (estilo Pou) */}
+        <div className="mt-3">
+          <div className="mb-1 flex justify-between text-xs font-bold" style={{ color: C.ink }}>
+            <span>⚡ Energia · {mood.label}</span><span>{Math.round(petEnergy)}%</span>
+          </div>
+          <div style={{ background: "rgba(58,42,24,.18)" }} className="h-4 w-full overflow-hidden rounded-full">
+            <div style={{ width: `${petEnergy}%`, background: mood.color, transition: "width .6s" }} className="h-full rounded-full" />
+          </div>
+        </div>
+        <p style={{ color: C.inkSoft }} className="mt-2 text-sm">{energyMsg}</p>
+
         {next && (
-          <div className="mt-4">
+          <div className="mt-3">
             <div className="mb-1 flex justify-between text-xs font-bold" style={{ color: C.ink }}>
               <span>Para {next.name}</span><span>{prog}%</span>
             </div>
@@ -1237,14 +1356,20 @@ function Pet({ data, petStage, petSad, update }) {
               className="flex-1 rounded-xl py-2 text-sm font-bold">{s.emoji}<br />{s.label}</button>
           ))}
         </div>
-        <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Cor</div>
-        <div className="flex flex-wrap gap-2">
-          {PET_COLORS.map((c) => (
-            <button key={c} onClick={() => setPet({ color: c })}
-              style={{ background: c, border: pet.color === c ? `3px solid ${C.goldDeep}` : "2px solid rgba(0,0,0,.15)" }}
-              className="h-9 w-9 rounded-full active:scale-90 transition" />
-          ))}
-        </div>
+        {IMG_SPECIES.includes(pet.species) ? (
+          <p style={{ color: C.inkSoft }} className="text-xs">Esta espécie tem ilustração própria que muda com o humor e a fase. 🎨</p>
+        ) : (
+          <>
+            <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Cor</div>
+            <div className="flex flex-wrap gap-2">
+              {PET_COLORS.map((c) => (
+                <button key={c} onClick={() => setPet({ color: c })}
+                  style={{ background: c, border: pet.color === c ? `3px solid ${C.goldDeep}` : "2px solid rgba(0,0,0,.15)" }}
+                  className="h-9 w-9 rounded-full active:scale-90 transition" />
+              ))}
+            </div>
+          </>
+        )}
       </Panel>
 
       <Panel>
@@ -1255,8 +1380,12 @@ function Pet({ data, petStage, petSad, update }) {
             const current = s === petStage;
             return (
               <div key={s.name} className="flex items-center gap-3" style={{ opacity: reached ? 1 : 0.45 }}>
-                <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center">
-                  {reached ? <PetAvatar size={36} species={pet.species} color={pet.color} stageIndex={i} idle={false} /> : <span className="text-2xl">🥚</span>}
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center">
+                  {reached
+                    ? (IMG_SPECIES.includes(pet.species)
+                        ? <img src={CAT_IMG[CAT_STAGE_IMG[i]]} alt={s.name} style={{ width: 40, height: 40, objectFit: "contain" }} />
+                        : <PetAvatar size={38} species={pet.species} color={pet.color} stageIndex={i} idle={false} />)
+                    : <span className="text-2xl">🥚</span>}
                 </div>
                 <div className="flex-1">
                   <div style={{ color: C.ink }} className="text-sm font-bold">{s.name}</div>
@@ -1315,73 +1444,37 @@ function AvatarFig({ cfg, level = 1, size = 150, hat = null, aura = null }) {
   );
 }
 
-function Avatar({ data, level, journeyStage, update }) {
-  const cfg = data.avatar || DEFAULT_AVATAR;
-  const setAv = (patch) => update({ avatar: { ...cfg, ...patch } });
+function Avatar({ data, level, journeyStage, petEnergy = 100, update }) {
+  const mood = energyMood(petEnergy);
+  const supremo = level >= AVATAR_SUPREMO_LEVEL;
+  const img = supremo ? AVATAR_IMG.supremo : AVATAR_IMG.normal;
+  const toNext = Math.max(0, AVATAR_SUPREMO_LEVEL - level);
 
   return (
     <div className="space-y-4">
       <Panel style={{ background: `linear-gradient(160deg, #fbf2dc, ${C.parch2})` }} className="text-center">
-        <div className="flex justify-center"><AvatarFig cfg={cfg} level={level} size={160} hat={cosmeticEmoji(data, "avatarHat")} aura={cosmeticEmoji(data, "avatarAura")} /></div>
+        <div className="flex justify-center">
+          <img src={img} alt={data.playerName} style={{ width: 200, height: 200, objectFit: "contain", animation: "float 3s ease-in-out infinite" }} />
+        </div>
         <div style={{ color: C.ink }} className="mt-1 font-serif text-2xl font-black">{data.playerName}</div>
         <div style={{ color: C.goldDeep }} className="font-bold">Nível {level} · {journeyStage.emoji} {journeyStage.name}</div>
-        <p style={{ color: C.inkSoft }} className="mt-2 text-sm">Suba de nível para desbloquear novos visuais. Aos 5, seu herói ganha um sorrisão; aos 10, uma aura dourada. ✨</p>
-      </Panel>
-
-      <Panel>
-        <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Pele</div>
-        <div className="flex flex-wrap gap-2">
-          {SKIN_TONES.map((c) => (
-            <button key={c} onClick={() => setAv({ skin: c })} style={{ background: c, border: cfg.skin === c ? `3px solid ${C.goldDeep}` : "2px solid rgba(0,0,0,.15)" }} className="h-9 w-9 rounded-full active:scale-90 transition" />
-          ))}
+        <div className="mx-auto mt-2 max-w-[220px]">
+          <div className="mb-1 flex justify-between text-[11px] font-bold" style={{ color: C.ink }}><span>⚡ Ânimo · {mood.label}</span><span>{Math.round(petEnergy)}%</span></div>
+          <div style={{ background: "rgba(58,42,24,.18)" }} className="h-2.5 w-full overflow-hidden rounded-full">
+            <div style={{ width: `${petEnergy}%`, background: mood.color, transition: "width .6s" }} className="h-full rounded-full" />
+          </div>
         </div>
       </Panel>
 
-      <Panel>
-        <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Cabelo</div>
-        <div className="mb-3 flex flex-wrap gap-2">
-          {HAIRS.map((h) => {
-            const locked = h.lvl > level; const sel = cfg.hair === h.id;
-            return (
-              <button key={h.id} disabled={locked} onClick={() => setAv({ hair: h.id })}
-                style={{ background: sel ? C.gold : "rgba(0,0,0,.06)", color: sel ? C.ink : C.inkSoft, opacity: locked ? 0.5 : 1 }}
-                className="rounded-xl px-3 py-2 text-sm font-bold">{h.label}{locked && <span style={{ color: C.inkSoft }} className="text-[9px] font-bold"> 🔒 Nv {h.lvl}</span>}</button>
-            );
-          })}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {HAIR_COLORS.map((c) => (
-            <button key={c} onClick={() => setAv({ hairColor: c })} style={{ background: c, border: cfg.hairColor === c ? `3px solid ${C.goldDeep}` : "2px solid rgba(0,0,0,.15)" }} className="h-8 w-8 rounded-full" />
-          ))}
-        </div>
-      </Panel>
-
-      <Panel>
-        <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Roupa</div>
-        <div className="flex flex-wrap gap-2">
-          {OUTFITS.map((o) => {
-            const locked = o.lvl > level; const sel = cfg.outfit === o.id;
-            return (
-              <button key={o.id} disabled={locked} onClick={() => setAv({ outfit: o.id })}
-                style={{ background: sel ? C.gold : "rgba(0,0,0,.06)", color: sel ? C.ink : C.inkSoft, opacity: locked ? 0.5 : 1 }}
-                className="rounded-xl px-3 py-2 text-sm font-bold">{o.label}{locked && <span style={{ color: C.inkSoft }} className="text-[9px] font-bold"> 🔒 Nv {o.lvl}</span>}</button>
-            );
-          })}
-        </div>
-      </Panel>
-
-      <Panel>
-        <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Acessório</div>
-        <div className="flex flex-wrap gap-2">
-          {ACCESSORIES.map((a) => {
-            const locked = a.lvl > level; const sel = cfg.accessory === a.id;
-            return (
-              <button key={a.id} disabled={locked} onClick={() => setAv({ accessory: a.id })}
-                style={{ background: sel ? C.gold : "rgba(0,0,0,.06)", color: sel ? C.ink : C.inkSoft, opacity: locked ? 0.5 : 1 }}
-                className="rounded-xl px-3 py-2 text-sm font-bold">{a.label}{locked && <span style={{ color: C.inkSoft }} className="text-[9px] font-bold"> 🔒 Nv {a.lvl}</span>}</button>
-            );
-          })}
-        </div>
+      <Panel className="text-center">
+        {supremo ? (
+          <div style={{ color: C.goldDeep }} className="font-serif text-lg font-black">🔥 Forma Suprema desbloqueada!</div>
+        ) : (
+          <>
+            <div style={{ color: C.ink }} className="font-serif text-lg font-bold">Forma Suprema 🔥</div>
+            <p style={{ color: C.inkSoft }} className="mt-1 text-sm">Chegue ao <b>nível {AVATAR_SUPREMO_LEVEL}</b> para o seu herói evoluir. Faltam <b>{toNext}</b> {toNext === 1 ? "nível" : "níveis"}.</p>
+          </>
+        )}
       </Panel>
     </div>
   );
@@ -1703,6 +1796,17 @@ function Stats({ data, level, playerClass, sound, update, onSignOut }) {
             <span style={{ background: "#fff", transform: data.soundOn ? "translateX(20px)" : "translateX(0)" }} className="h-5 w-5 rounded-full transition" />
           </span>
         </button>
+      </Panel>
+
+      <Panel style={{ borderColor: data.hardMode ? C.ember : C.goldDeep }}>
+        <button onClick={() => { if (!data.hardMode && !confirm("Ligar o Modo Difícil? Você passará a PERDER XP pelas missões não feitas a cada dia, podendo até cair de nível. Pode desligar quando quiser.")) return; update({ hardMode: !data.hardMode }); }}
+          className="flex w-full items-center justify-between">
+          <span style={{ color: C.ink }} className="flex items-center gap-2 font-bold"><Skull size={18} /> Modo Difícil</span>
+          <span style={{ background: data.hardMode ? C.ember : "rgba(0,0,0,.2)" }} className="flex h-6 w-11 items-center rounded-full p-0.5 transition">
+            <span style={{ background: "#fff", transform: data.hardMode ? "translateX(20px)" : "translateX(0)" }} className="h-5 w-5 rounded-full transition" />
+          </span>
+        </button>
+        <p style={{ color: C.inkSoft }} className="mt-2 text-xs">Para quem quer mais adrenalina: missões não feitas custam XP (o mesmo que valiam). Sempre opcional.</p>
       </Panel>
 
       <button onClick={() => { if (confirm("Recomeçar a aventura do zero? Tudo será apagado.")) { update(freshData()); } }}
