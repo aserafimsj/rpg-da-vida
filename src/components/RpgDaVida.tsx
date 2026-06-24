@@ -75,6 +75,14 @@ const MEAL_DEFAULTS = [
 const CUP_ML = 250;            // 1 copo = 250 ml
 const WATER_XP = 2;            // XP por copo (só até a meta)
 const WATER_GOAL_L_DEFAULT = 3; // meta padrão em litros (configurável)
+const GLUCOSE_TAGS = [
+  { id: "jejum", label: "Em jejum" },
+  { id: "antes", label: "Antes de comer" },
+  { id: "depois", label: "Depois de comer" },
+  { id: "dormir", label: "Antes de dormir" },
+  { id: "outro", label: "Outro" },
+];
+const GLUCOSE_INTERVAL_DEFAULT = 3; // horas
 const cupsForLiters = (l) => Math.round((l * 1000) / CUP_ML);
 
 /* ---------- Recompensas padrão ---------- */
@@ -308,6 +316,8 @@ const DEFAULT_DATA = {
   water: { date: dayKey(), count: 0 },          // count = copos de 250 ml
   waterScored: { date: dayKey(), cups: 0 },      // anti-farm da água
   waterGoalL: WATER_GOAL_L_DEFAULT,
+  glucose: [],
+  glucoseIntervalH: GLUCOSE_INTERVAL_DEFAULT,
   daysActive: [],
   currentStreak: 0,
   longestStreak: 0,
@@ -410,6 +420,8 @@ export default function RpgDaVida({ user, onSignOut }) {
         if (!d.scoredToday || d.scoredToday.date !== dayKey()) d.scoredToday = { date: dayKey(), ids: [] };
         if (!d.waterScored || d.waterScored.date !== dayKey()) d.waterScored = { date: dayKey(), cups: 0 };
         if (typeof d.waterGoalL !== "number") d.waterGoalL = WATER_GOAL_L_DEFAULT;
+        if (!Array.isArray(d.glucose)) d.glucose = [];
+        if (typeof d.glucoseIntervalH !== "number") d.glucoseIntervalH = GLUCOSE_INTERVAL_DEFAULT;
         if (!d.water || typeof d.water.count !== "number") d.water = { date: dayKey(), count: 0 };
         if (typeof d.gems !== "number") d.gems = 0;
         if (!d.pet || typeof d.pet !== "object") d.pet = { ...DEFAULT_PET };
@@ -1666,6 +1678,121 @@ function MealForm({ onCancel, onAdd }) {
   );
 }
 
+function GlucosePanel({ data, update }) {
+  const entries = Array.isArray(data.glucose) ? data.glucose : [];
+  const intervalH = data.glucoseIntervalH || GLUCOSE_INTERVAL_DEFAULT;
+  const [value, setValue] = useState("");
+  const [tag, setTag] = useState("antes");
+  const [, setTick] = useState(0);
+  useEffect(() => { const t = setInterval(() => setTick((x) => x + 1), 60000); return () => clearInterval(t); }, []);
+
+  const last = entries[0];
+  const nextDueTs = last ? new Date(last.ts).getTime() + intervalH * 3600000 : null;
+  const overdue = !last || Date.now() >= nextDueTs;
+  const fmt = (ts) => new Date(ts).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const fmtTime = (ts) => new Date(ts).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  const tagLabel = (id) => (GLUCOSE_TAGS.find((t) => t.id === id) || {}).label || "";
+
+  const add = () => {
+    const v = parseInt(String(value).replace(/\D/g, ""), 10);
+    if (!v || v <= 0) return;
+    const entry = { id: "g_" + Math.random().toString(36).slice(2), value: v, tag, ts: new Date().toISOString() };
+    update({ glucose: [entry, ...entries].slice(0, 300) });
+    setValue("");
+  };
+  const remove = (id) => update({ glucose: entries.filter((e) => e.id !== id) });
+
+  // mini-gráfico neutro (sem cores de "alto/baixo")
+  const chronological = entries.slice(0, 14).reverse();
+  let spark = null;
+  if (chronological.length >= 2) {
+    const vals = chronological.map((e) => e.value);
+    const min = Math.min(...vals), max = Math.max(...vals);
+    const span = max - min || 1;
+    const wv = 300, hv = 56, pad = 6;
+    const pts = chronological.map((e, i) => {
+      const x = pad + (i * (wv - pad * 2)) / (chronological.length - 1);
+      const y = hv - pad - ((e.value - min) / span) * (hv - pad * 2);
+      return [x, y];
+    });
+    const d = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
+    spark = (
+      <svg viewBox={`0 0 ${wv} ${hv}`} style={{ width: "100%", height: 56 }} preserveAspectRatio="none">
+        <path d={d} fill="none" stroke={C.xpDeep} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+        {pts.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r="2.6" fill={C.xpDeep} />)}
+      </svg>
+    );
+  }
+
+  return (
+    <Panel style={{ borderColor: overdue ? C.ember : "#34b3a0" }}>
+      <div className="flex items-center justify-between">
+        <div style={{ color: C.ink }} className="flex items-center gap-2 font-serif text-lg font-black">🩸 Glicose</div>
+        {last && (
+          <div className="text-right">
+            <div style={{ color: C.ink }} className="text-2xl font-black leading-none">{last.value}<span className="text-xs font-bold"> mg/dL</span></div>
+            <div style={{ color: C.inkSoft }} className="text-[11px]">{tagLabel(last.tag)} · {fmtTime(last.ts)}</div>
+          </div>
+        )}
+      </div>
+
+      {/* lembrete */}
+      <div className="mt-2 rounded-xl px-3 py-2 text-sm font-bold"
+        style={{ background: overdue ? "#fff1ec" : "rgba(52,179,160,.12)", color: overdue ? "#c0392b" : "#2a8c7e" }}>
+        {overdue ? "⏰ Hora de medir a glicose!" : `Próxima medição por volta das ${fmtTime(nextDueTs)}`}
+      </div>
+
+      {/* intervalo do lembrete */}
+      <div className="mt-2 flex items-center gap-2">
+        <span style={{ color: C.inkSoft }} className="text-xs font-bold">Lembrar a cada:</span>
+        {[2, 3, 4, 6].map((h) => (
+          <button key={h} onClick={() => update({ glucoseIntervalH: h })}
+            style={{ background: intervalH === h ? C.gold : "rgba(0,0,0,.06)", color: intervalH === h ? C.ink : C.inkSoft }}
+            className="rounded-lg px-2.5 py-1 text-xs font-bold">{h}h</button>
+        ))}
+      </div>
+
+      {/* registro manual */}
+      <div className="mt-3 flex gap-2">
+        <input value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }}
+          inputMode="numeric" placeholder="ex.: 120"
+          style={{ borderColor: "#34b3a0", color: C.ink }} className="w-24 rounded-xl border-2 bg-white/70 px-3 py-2 text-center font-bold outline-none" />
+        <span style={{ color: C.inkSoft }} className="self-center text-sm font-bold">mg/dL</span>
+        <button onClick={add} style={{ background: "#34b3a0", color: "#fff" }} className="flex-1 rounded-xl py-2 font-bold active:scale-95 transition">Anotar</button>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {GLUCOSE_TAGS.map((t) => (
+          <button key={t.id} onClick={() => setTag(t.id)}
+            style={{ background: tag === t.id ? C.gold : "rgba(0,0,0,.06)", color: tag === t.id ? C.ink : C.inkSoft }}
+            className="rounded-lg px-2.5 py-1 text-xs font-bold">{t.label}</button>
+        ))}
+      </div>
+
+      {spark && <div className="mt-3">{spark}</div>}
+
+      {/* histórico */}
+      {entries.length > 0 && (
+        <div className="mt-3 space-y-1">
+          <div style={{ color: C.inkSoft }} className="text-xs font-bold">Histórico recente</div>
+          {entries.slice(0, 6).map((e) => (
+            <div key={e.id} className="flex items-center justify-between text-sm" style={{ color: C.ink }}>
+              <span><b>{e.value}</b> mg/dL <span style={{ color: C.inkSoft }} className="text-xs">· {tagLabel(e.tag)}</span></span>
+              <span className="flex items-center gap-2">
+                <span style={{ color: C.inkSoft }} className="text-xs">{fmt(e.ts)}</span>
+                <button onClick={() => remove(e.id)} style={{ color: C.inkSoft }} className="p-0.5"><Trash2 size={14} /></button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p style={{ color: C.inkSoft }} className="mt-3 text-[11px]">
+        Isto é um organizador dos seus registros, não um conselho médico. Siga as metas e horários combinados com seu médico. 💙
+      </p>
+    </Panel>
+  );
+}
+
 function Saude({ data, addWater, toggleTask, update, medDone }) {
   const [addP, setAddP] = useState(null);    // 'manha' | 'noite' (remédios)
   const [addingMeal, setAddingMeal] = useState(false);
@@ -1722,6 +1849,9 @@ function Saude({ data, addWater, toggleTask, update, medDone }) {
           <Flame size={16} style={{ color: C.ember }} /> {data.medStreak} dias com remédios em dia
         </div>
       </Panel>
+
+      {/* glicose */}
+      <GlucosePanel data={data} update={update} />
 
       {/* botão editar refeições/remédios */}
       <div className="flex justify-end px-1">
