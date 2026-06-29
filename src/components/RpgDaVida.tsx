@@ -4,13 +4,14 @@
 import React, { useState, useEffect, useRef } from "react";
 import { getSupabase } from "@/lib/supabaseClient";
 import { getDeferred, subscribe as subscribeInstall, doInstall, isStandalone, isIOS } from "@/lib/pwa";
+import { pushSupported, currentSubscription, enablePush, disablePush, sendTestLocal } from "@/lib/push";
 import RoutineDefense from "./RoutineDefense";
 import { loadSave, persistSave } from "@/lib/save";
 import {
   Sword, Store, Heart, BarChart3, Crown, Flame,
   Plus, Minus, Trash2, X, Target, Zap, Volume2, VolumeX, Coins, Check,
   Trophy, Skull, Droplet, Pill, Sun, Moon, Utensils, LogOut, Pencil,
-  Gem, PawPrint, Smile, Mail,
+  Gem, PawPrint, Smile, Mail, Bell,
 } from "lucide-react";
 
 /* ============================================================
@@ -2016,6 +2017,8 @@ function Stats({ data, level, playerClass, sound, update, onSignOut, user }) {
 
       <InstallSection />
 
+      <NotificationsPanel user={user} />
+
       <AccountPanel user={user} />
 
       <button onClick={() => { if (confirm("Recomeçar a aventura do zero? Tudo será apagado.")) { update(freshData()); } }}
@@ -2026,6 +2029,82 @@ function Stats({ data, level, playerClass, sound, update, onSignOut, user }) {
         <LogOut size={16} /> Sair da conta
       </button>
     </div>
+  );
+}
+
+function NotificationsPanel({ user }) {
+  const supabase = getSupabase();
+  const [state, setState] = useState("loading"); // loading | unsupported | need-install | ready
+  const [subscribed, setSubscribed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      if (!pushSupported()) {
+        setState(isIOS() && !isStandalone() ? "need-install" : "unsupported");
+        return;
+      }
+      try {
+        const sub = await currentSubscription();
+        setSubscribed(!!sub && typeof Notification !== "undefined" && Notification.permission === "granted");
+      } catch (e) {}
+      setState("ready");
+    })();
+  }, []);
+
+  const enable = async () => {
+    setBusy(true); setMsg("");
+    const r = await enablePush(supabase, user.id);
+    setBusy(false);
+    if (r.ok) { setSubscribed(true); setMsg("Notificações ativadas! 🔔"); }
+    else if (r.reason === "denied") setMsg("Permissão negada. Você pode liberar nas configurações do navegador, em Notificações.");
+    else if (r.reason === "novapid") setMsg("Configuração ainda não disponível. Tente novamente após o próximo deploy.");
+    else if (r.reason === "unsupported") setMsg("Seu navegador não suporta notificações.");
+    else setMsg("Não consegui ativar agora. " + (r.error || ""));
+  };
+  const disable = async () => {
+    setBusy(true); await disablePush(supabase); setBusy(false);
+    setSubscribed(false); setMsg("Notificações desativadas.");
+  };
+  const test = async () => {
+    try { await sendTestLocal("QuesTAH 🗡️", "Funcionou! É assim que os lembretes vão chegar."); }
+    catch (e) { setMsg("Não consegui mostrar o teste."); }
+  };
+
+  if (state === "loading") return null;
+
+  return (
+    <Panel style={{ borderColor: C.gold }}>
+      <div style={{ color: C.ink }} className="flex items-center gap-2 font-bold"><Bell size={16} /> Notificações</div>
+
+      {state === "unsupported" && (
+        <p style={{ color: C.inkSoft }} className="mt-1 text-sm">Seu navegador não suporta notificações push. Tente pelo Chrome (Android) ou pelo app instalado.</p>
+      )}
+
+      {state === "need-install" && (
+        <p style={{ color: C.inkSoft }} className="mt-1 text-sm">No iPhone, primeiro <b>instale o app</b> (Compartilhar → Adicionar à Tela de Início). Depois volte aqui para ativar os avisos.</p>
+      )}
+
+      {state === "ready" && (
+        <>
+          <p style={{ color: C.inkSoft }} className="mt-1 mb-2 text-sm">Receba lembretes das missões mesmo com o app fechado.</p>
+          {!subscribed ? (
+            <button onClick={enable} disabled={busy} style={{ background: C.gold, color: C.ink, opacity: busy ? 0.6 : 1 }}
+              className="w-full rounded-xl py-2.5 font-serif font-bold active:scale-95 transition">{busy ? "Ativando…" : "Ativar notificações"}</button>
+          ) : (
+            <>
+              <div className="flex gap-2">
+                <button onClick={test} style={{ background: C.xpDeep, color: "#fff" }} className="flex-1 rounded-xl py-2 text-sm font-bold active:scale-95 transition">Testar agora</button>
+                <button onClick={disable} disabled={busy} style={{ background: "rgba(0,0,0,.1)", color: C.ink }} className="flex-1 rounded-xl py-2 text-sm font-bold active:scale-95 transition">Desativar</button>
+              </div>
+              <p style={{ color: C.inkSoft }} className="mt-2 text-xs">Lembretes nos horários de manhã, tarde e noite (vamos poder ajustar depois).</p>
+            </>
+          )}
+          {msg && <p style={{ color: C.inkSoft }} className="mt-2 text-sm">{msg}</p>}
+        </>
+      )}
+    </Panel>
   );
 }
 
