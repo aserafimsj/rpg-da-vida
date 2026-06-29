@@ -152,7 +152,7 @@ const TAMA_NEED_LABEL = { hunger: "Fome", thirst: "Água", hygiene: "Higiene", f
 function cl100(v) { return Math.max(0, Math.min(100, v)); }
 function freshTama() {
   const now = Date.now();
-  return { startedAt: new Date().toISOString(), ts: now, hunger: 80, thirst: 80, hygiene: 90, fun: 80, sick: false };
+  return { startedAt: new Date().toISOString(), ts: now, hunger: 80, thirst: 80, hygiene: 90, fun: 80, sick: false, type: null, stage: 0, bond: 0 };
 }
 function decayTama(t) {
   const now = Date.now();
@@ -190,10 +190,38 @@ function tamaImageKey(t, stageIndex) {
 function tamaMoodLabel(t) {
   if (t.sick) return { label: "Doente — dê remédio 💊", color: "#c0392b" };
   const avg = tamaAvg(t);
-  if (avg >= 75) return { label: "Radiante e bem cuidada", color: C.xp };
+  if (avg >= 75) return { label: "Radiante e bem cuidado", color: C.xp };
   if (avg >= 45) return { label: "De boa", color: C.gold };
   if (avg >= 20) return { label: "Precisando de você", color: C.ember };
   return { label: "Muito carente", color: "#c0392b" };
+}
+
+/* ---------- Monstrinho digital (estilo Digimon) ---------- */
+const MON_TYPES = [
+  { id: "fogo", label: "Fogo", emoji: "🔥", color: "#e8843a", vibe: "ousado e quentão" },
+  { id: "agua", label: "Água", emoji: "💧", color: "#46b6e8", vibe: "calmo e fluido" },
+  { id: "planta", label: "Planta", emoji: "🌿", color: "#6fcf5e", vibe: "tranquilo e teimoso" },
+];
+const MON_STAGES = ["Ovo Digital", "Bebê", "Treino", "Amador"];
+const MON_EVO = [25, 70, 140]; // vínculo p/ evoluir entre os estágios
+const MON_MAX_STAGE = 3;
+function monSrc(type, stage) { return `/mon/${type}_${stage}.png`; }
+function gainBond(d, amt) {
+  const t = d.tama;
+  if (!t || !t.type) return;
+  t.bond = (t.bond || 0) + amt;
+  while (t.stage < MON_MAX_STAGE && t.bond >= MON_EVO[t.stage]) {
+    t.bond -= MON_EVO[t.stage];
+    t.stage += 1;
+    t.justEvolved = t.stage;
+  }
+}
+
+function MonSprite({ type, stage, size = 150, alive = true }) {
+  return (
+    <img src={monSrc(type, stage)} alt="monstrinho"
+      style={{ width: size, height: size, imageRendering: "pixelated", objectFit: "contain", animation: alive ? "monbob 0.9s steps(1) infinite" : "none" }} />
+  );
 }
 
 /* ---------- Mapa da jornada ---------- */
@@ -483,6 +511,7 @@ export default function RpgDaVida({ user, onSignOut }) {
         if (!d.cosmetics || typeof d.cosmetics !== "object") d.cosmetics = { owned: [], equipped: {} };
         if (typeof d.petEnergy !== "number") { d.petEnergy = 100; d.petEnergyTs = Date.now(); }
         if (!d.tama || typeof d.tama !== "object") d.tama = freshTama();
+        if (!("type" in d.tama)) { d.tama.type = null; d.tama.stage = 0; d.tama.bond = 0; }
         // marca missões de cuidado com seu "need" e garante a missão de brincar
         if (Array.isArray(d.tasks)) {
           const needByKey = { comida_mona: "hunger", agua_mona: "thirst", areia: "hygiene", brincar_mona: "fun" };
@@ -613,6 +642,9 @@ export default function RpgDaVida({ user, onSignOut }) {
           if (task.need) d.tama[task.need] = 100;
           if (task.category === "pet") d.tama.fun = cl100(d.tama.fun + 12);
           if (d.tama.hunger > 20 && d.tama.thirst > 20 && d.tama.hygiene > 20) d.tama.sick = false;
+          // vínculo (evolução por bom cuidado)
+          if (task.category === "pet") gainBond(d, 8);
+          if (task.need) gainBond(d, 6);
 
           // remédios do dia completos?
           const medIds = (d.meds || []).map((m) => m.id);
@@ -713,17 +745,23 @@ export default function RpgDaVida({ user, onSignOut }) {
     return award;
   };
 
-  // interações livres do Tamagotchi (não dão XP/ouro; só cuidam da Mona virtual)
+  // interações livres do Tamagotchi (não dão XP/ouro; só cuidam do bichinho)
   const tamaCare = (action) => setData((prev) => {
     const d = { ...prev };
     settleTama(d);
     const t = d.tama;
-    if (action === "carinho") t.fun = cl100(t.fun + 8);
-    else if (action === "limpar") t.hygiene = cl100(t.hygiene + 25);
-    else if (action === "remedio") { t.sick = false; t.fun = cl100(t.fun + 5); }
-    else if (action === "brincar_win") t.fun = cl100(t.fun + 18);
-    else if (action === "brincar_ok") t.fun = cl100(t.fun + 6);
+    if (action === "carinho") { t.fun = cl100(t.fun + 8); gainBond(d, 2); }
+    else if (action === "limpar") { t.hygiene = cl100(t.hygiene + 25); gainBond(d, 2); }
+    else if (action === "remedio") { t.sick = false; t.fun = cl100(t.fun + 5); gainBond(d, 3); }
+    else if (action === "brincar_win") { t.fun = cl100(t.fun + 18); gainBond(d, 4); }
+    else if (action === "brincar_ok") { t.fun = cl100(t.fun + 6); gainBond(d, 1); }
     d.tama = { ...t };
+    return d;
+  });
+
+  const pickStarter = (type) => setData((prev) => {
+    const d = { ...prev, tama: { ...(prev.tama || freshTama()) } };
+    d.tama.type = type; d.tama.stage = 0; d.tama.bond = 0; d.tama.startedAt = new Date().toISOString();
     return d;
   });
 
@@ -834,7 +872,7 @@ export default function RpgDaVida({ user, onSignOut }) {
             openGame: () => setShowGame(true) }} />
         )}
         {tab === "loja" && <Loja data={data} buyReward={buyReward} buyCosmetic={buyCosmetic} update={update} />}
-        {tab === "pet" && <Pet data={data} petStage={petStage} tama={tama} tamaCare={tamaCare} update={update} />}
+        {tab === "pet" && <Pet data={data} tama={tama} tamaCare={tamaCare} pickStarter={pickStarter} update={update} />}
         {tab === "avatar" && <Avatar data={data} level={level} journeyStage={journeyStage} petEnergy={tAvg} update={update} />}
         {tab === "saude" && <Saude data={data} addWater={addWater} toggleTask={toggleTask} update={update}
           medDone={(() => { const ids = (data.meds || []).map((m) => m.id); return ids.length > 0 && ids.every((id) => data.doneToday.includes(id)); })()} />}
@@ -1462,60 +1500,117 @@ function PetDisplay({ data, energy = 100, stageIndex = 0, size = 150, imgKeyOver
   return <PetAvatar size={size} species={pet.species} color={pet.color} sad={energy < 40} stageIndex={stageIndex} hat={hat} glasses={glasses} />;
 }
 
-function Pet({ data, petStage, tama, tamaCare, update }) {
+function Pet({ data, tama, tamaCare, pickStarter, update }) {
   const pet = data.pet || DEFAULT_PET;
-  const idx = PET_STAGES.indexOf(petStage);
-  const next = PET_STAGES[idx + 1];
-  const prog = next ? Math.min(100, Math.round(((data.xpTotal - petStage.xp) / (next.xp - petStage.xp)) * 100)) : 100;
   const setPet = (patch) => update({ pet: { ...pet, ...patch } });
   const [editingName, setEditingName] = useState(false);
   const [nameVal, setNameVal] = useState(pet.name);
   const [, setTick] = useState(0);
   const [game, setGame] = useState(null); // null | 'play' | 'win' | 'ok'
-  useEffect(() => { const t = setInterval(() => setTick((x) => x + 1), 20000); return () => clearInterval(t); }, []);
+  useEffect(() => { const id = setInterval(() => setTick((x) => x + 1), 20000); return () => clearInterval(id); }, []);
 
-  // recalcula ao vivo (decai com o tempo enquanto a aba está aberta)
   const t = decayTama(data.tama || freshTama());
+
+  // ---- ainda sem inicial: tela de escolha do ovo ----
+  if (!t.type) {
+    return (
+      <div className="space-y-4">
+        <Panel className="text-center">
+          <div style={{ color: C.ink }} className="font-serif text-xl font-black">Escolha seu Ovo Digital 🥚</div>
+          <p style={{ color: C.inkSoft }} className="mt-1 mb-3 text-sm">Cada tipo choca um monstrinho diferente. Cuide bem dele (com as missões e o carinho) e ele evolui!</p>
+          <div className="grid grid-cols-3 gap-2">
+            {MON_TYPES.map((m) => (
+              <button key={m.id} onClick={() => pickStarter(m.id)}
+                style={{ background: "rgba(0,0,0,.04)", borderColor: m.color }}
+                className="rounded-2xl border-2 p-2 active:scale-95 transition">
+                <img src={monSrc(m.id, 0)} alt={m.label} style={{ width: "100%", imageRendering: "pixelated" }} />
+                <div style={{ color: m.color }} className="text-sm font-bold">{m.emoji} {m.label}</div>
+                <div style={{ color: C.inkSoft }} className="text-[10px] leading-tight">{m.vibe}</div>
+              </button>
+            ))}
+          </div>
+        </Panel>
+      </div>
+    );
+  }
+
+  const typeInfo = MON_TYPES.find((m) => m.id === t.type) || MON_TYPES[0];
   const mood = tamaMoodLabel(t);
-  const imgKey = tamaImageKey(t, idx);
   const poop = t.hygiene < 45 && !t.sick;
   const ageDays = Math.max(0, Math.floor((Date.now() - new Date(t.startedAt || Date.now()).getTime()) / 86400000));
+  const evoPct = t.stage < MON_MAX_STAGE ? Math.min(100, Math.round((t.bond / MON_EVO[t.stage]) * 100)) : 100;
 
   const METERS = [
     { key: "hunger", label: "Fome", emoji: "🍖", color: "#e8843a", nudge: "Hora de pôr comida pra Mona de verdade 🍖" },
     { key: "thirst", label: "Água", emoji: "💧", color: "#3a8fd8", nudge: "Troca a aguinha da Mona 💧" },
     { key: "hygiene", label: "Higiene", emoji: "🧹", color: "#2a8c4a", nudge: "A caixa de areia pede limpeza 🧹" },
-    { key: "fun", label: "Felicidade", emoji: "🧶", color: C.rose, nudge: "Ela quer brincar — dá uma atenção 🧶" },
+    { key: "fun", label: "Felicidade", emoji: "🧶", color: C.rose, nudge: "Ele quer brincar — dá uma atenção 🧶" },
   ];
   const lows = METERS.filter((m) => t[m.key] < 35).sort((a, b) => t[a.key] - t[b.key]);
 
   const play = (pick) => {
-    const monaPick = Math.random() < 0.5 ? "L" : "R";
-    if (pick === monaPick) { tamaCare("brincar_win"); setGame("win"); }
+    const monPick = Math.random() < 0.5 ? "L" : "R";
+    if (pick === monPick) { tamaCare("brincar_win"); setGame("win"); }
     else { tamaCare("brincar_ok"); setGame("ok"); }
   };
 
   return (
     <div className="space-y-4">
-      <Panel style={{ background: `linear-gradient(160deg, #f0f7ff, ${C.parch2})` }} className="text-center">
-        <div className="relative inline-block">
-          <PetDisplay data={data} stageIndex={idx} size={170} imgKeyOverride={imgKey} />
-          {t.sick && <span className="absolute" style={{ top: 4, right: 6, fontSize: 30 }}>🤒</span>}
-          {poop && <span className="absolute" style={{ bottom: 8, left: 8, fontSize: 28 }}>💩</span>}
-        </div>
+      {/* comemoração de evolução */}
+      {t.justEvolved != null && (
+        <Panel style={{ background: "#fff7e6", borderColor: C.gold }} className="text-center">
+          <div className="text-3xl">🎉</div>
+          <div style={{ color: C.ink }} className="font-serif font-black">{pet.name} evoluiu para {MON_STAGES[t.justEvolved]}!</div>
+          <button onClick={() => update({ tama: { ...data.tama, justEvolved: null } })}
+            style={{ background: C.gold, color: C.ink }} className="mt-2 rounded-xl px-4 py-1.5 text-sm font-bold active:scale-95 transition">Oba! 🎈</button>
+        </Panel>
+      )}
 
+      {/* cenário (quarto) */}
+      <Panel style={{ padding: 0, overflow: "hidden" }}>
+        <div className="relative" style={{ height: 220, background: "linear-gradient(#cfe8ff 0%, #cfe8ff 58%, #e7c79a 58%, #d8ae79 100%)" }}>
+          <div className="absolute" style={{ top: 18, left: 22, width: 46, height: 38, background: "#bfe9ff", border: "4px solid #fff", borderRadius: 6 }} />
+          <div className="absolute" style={{ bottom: 16, left: "50%", transform: "translateX(-50%)", width: 160, height: 28, background: "#00000016", borderRadius: "50%" }} />
+          {poop && <span className="absolute" style={{ bottom: 18, left: "28%", fontSize: 24 }}>💩</span>}
+          <div className="absolute" style={{ bottom: 24, left: "50%", transform: "translateX(-50%)" }}>
+            <div className="relative">
+              <MonSprite type={t.type} stage={t.stage} size={132} alive={!t.sick} />
+              {t.sick && <span className="absolute" style={{ top: -2, right: -8, fontSize: 26 }}>🤒</span>}
+            </div>
+          </div>
+        </div>
+      </Panel>
+
+      {/* infos + vínculo + medidores */}
+      <Panel className="text-center">
         {editingName ? (
           <input autoFocus value={nameVal} onChange={(e) => setNameVal(e.target.value)}
-            onBlur={() => { setPet({ name: nameVal.trim() || "Pet" }); setEditingName(false); }}
+            onBlur={() => { setPet({ name: nameVal.trim() || "Monstrinho" }); setEditingName(false); }}
             onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
             style={{ color: C.ink, borderColor: C.goldDeep }}
-            className="mt-1 w-40 border-b-2 bg-transparent text-center font-serif text-2xl font-black outline-none" />
+            className="w-44 border-b-2 bg-transparent text-center font-serif text-2xl font-black outline-none" />
         ) : (
           <button onClick={() => { setNameVal(pet.name); setEditingName(true); }} style={{ color: C.ink }}
-            className="mt-1 font-serif text-2xl font-black">{pet.name} ✎</button>
+            className="font-serif text-2xl font-black">{pet.name} ✎</button>
         )}
         <div style={{ color: mood.color }} className="font-bold">{mood.label}</div>
-        <div style={{ color: C.inkSoft }} className="text-xs">{petStage.name} · {ageDays} {ageDays === 1 ? "dia" : "dias"} de vida</div>
+        <div style={{ color: C.inkSoft }} className="mb-3 text-xs">{typeInfo.emoji} {MON_STAGES[t.stage]} · {ageDays} {ageDays === 1 ? "dia" : "dias"}</div>
+
+        {/* vínculo / evolução */}
+        <div className="text-left">
+          {t.stage < MON_MAX_STAGE ? (
+            <>
+              <div className="mb-0.5 flex justify-between text-xs font-bold" style={{ color: C.ink }}>
+                <span>✨ Vínculo · vira {MON_STAGES[t.stage + 1]}</span><span>{evoPct}%</span>
+              </div>
+              <div style={{ background: "rgba(58,42,24,.18)" }} className="h-3 w-full overflow-hidden rounded-full">
+                <div style={{ width: `${evoPct}%`, background: `linear-gradient(90deg, ${typeInfo.color}, ${C.gold})`, transition: "width .5s" }} className="h-full rounded-full" />
+              </div>
+            </>
+          ) : (
+            <div style={{ color: C.gold }} className="text-center text-sm font-bold">✨ Forma máxima por enquanto — novos estágios em breve!</div>
+          )}
+        </div>
 
         {/* medidores */}
         <div className="mt-4 space-y-2 text-left">
@@ -1539,9 +1634,9 @@ function Pet({ data, petStage, tama, tamaCare, update }) {
       {(lows.length > 0 || t.sick) && (
         <Panel style={{ background: "#fff7e6", borderColor: C.ember }}>
           <div style={{ color: C.ink }} className="text-sm">
-            <b>A Mona te chama 🐾</b> — cuidar dela aqui é lembrete pra cuidar dela de verdade:
+            <b>{pet.name} te chama 🐾</b> — cuidar dele aqui lembra de cuidar da Mona de verdade:
             <ul className="mt-1 list-disc pl-5">
-              {t.sick && <li>Ela não está bem. Carinho e cuidado ajudam a recuperar. 💛</li>}
+              {t.sick && <li>Ele não está bem. Remédio e cuidado ajudam a recuperar. 💛</li>}
               {lows.slice(0, 3).map((m) => <li key={m.key}>{m.nudge}</li>)}
             </ul>
           </div>
@@ -1555,7 +1650,7 @@ function Pet({ data, petStage, tama, tamaCare, update }) {
           <div className="text-center">
             {game === "play" ? (
               <>
-                <div style={{ color: C.ink }} className="mb-2 text-sm font-bold">Pra que lado a Mona vai pular? 🐱</div>
+                <div style={{ color: C.ink }} className="mb-2 text-sm font-bold">Pra que lado o {pet.name} vai pular? 🎲</div>
                 <div className="flex justify-center gap-3">
                   <button onClick={() => play("L")} style={{ background: C.gold, color: C.ink }} className="rounded-xl px-6 py-3 text-2xl active:scale-90 transition">⬅️</button>
                   <button onClick={() => play("R")} style={{ background: C.gold, color: C.ink }} className="rounded-xl px-6 py-3 text-2xl active:scale-90 transition">➡️</button>
@@ -1564,7 +1659,7 @@ function Pet({ data, petStage, tama, tamaCare, update }) {
             ) : (
               <>
                 <div className="text-3xl">{game === "win" ? "🎉" : "😸"}</div>
-                <div style={{ color: C.ink }} className="mt-1 text-sm font-bold">{game === "win" ? "Acertou! A Mona amou brincar com você!" : "Quase! Ela se divertiu mesmo assim."}</div>
+                <div style={{ color: C.ink }} className="mt-1 text-sm font-bold">{game === "win" ? "Acertou! Ele amou brincar com você!" : "Quase! Ele se divertiu mesmo assim."}</div>
                 <button onClick={() => setGame(null)} style={{ color: C.goldDeep }} className="mt-2 text-sm font-bold">voltar</button>
               </>
             )}
@@ -1576,40 +1671,12 @@ function Pet({ data, petStage, tama, tamaCare, update }) {
             <button onClick={() => setGame("play")} style={{ background: "rgba(0,0,0,.06)", color: C.ink }} className="rounded-xl py-2.5 text-sm font-bold active:scale-95 transition">🎮 Brincar</button>
             {t.sick
               ? <button onClick={() => tamaCare("remedio")} style={{ background: C.xpDeep, color: "#fff" }} className="rounded-xl py-2.5 text-sm font-bold active:scale-95 transition">💊 Remédio</button>
-              : <div className="rounded-xl py-2.5 text-center text-xs" style={{ background: "rgba(0,0,0,.03)", color: C.inkSoft }}>😺 saudável</div>}
+              : <div className="rounded-xl py-2.5 text-center text-xs" style={{ background: "rgba(0,0,0,.03)", color: C.inkSoft }}>💚 saudável</div>}
           </div>
         )}
         <p style={{ color: C.inkSoft }} className="mt-3 text-xs">
-          A Mona virtual é o espelho da sua Mona real: as missões de <b>comida, água, areia e brincar</b> enchem os medidores. Cuide de uma e a outra agradece. 💛 (Ela fica triste/doente, mas <b>nunca</b> morre.)
+          As missões de <b>comida, água, areia e brincar</b> (com a Mona real) enchem os medidores e fortalecem o <b>vínculo</b>, que faz o {pet.name} evoluir. Ele fica triste/doente, mas <b>nunca</b> morre. 💛
         </p>
-      </Panel>
-
-      {/* evolução */}
-      <Panel>
-        <div style={{ color: C.ink }} className="mb-3 font-serif font-bold">Evolução</div>
-        <div className="space-y-2">
-          {PET_STAGES.map((s, i) => {
-            const reached = data.xpTotal >= s.xp;
-            const current = s === petStage;
-            return (
-              <div key={s.name} className="flex items-center gap-3" style={{ opacity: reached ? 1 : 0.45 }}>
-                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center">
-                  {reached
-                    ? (IMG_SPECIES.includes(pet.species)
-                        ? <img src={CAT_IMG[CAT_STAGE_IMG[i]]} alt={s.name} style={{ width: 40, height: 40, objectFit: "contain" }} />
-                        : <PetAvatar size={38} species={pet.species} color={pet.color} stageIndex={i} idle={false} />)
-                    : <span className="text-2xl">🥚</span>}
-                </div>
-                <div className="flex-1">
-                  <div style={{ color: C.ink }} className="text-sm font-bold">{s.name}</div>
-                  <div style={{ color: C.inkSoft }} className="text-xs">{s.xp} XP</div>
-                </div>
-                {current && <Tag color={C.rose}>agora</Tag>}
-                {reached && !current && <Check size={16} style={{ color: C.xpDeep }} />}
-              </div>
-            );
-          })}
-        </div>
       </Panel>
     </div>
   );
@@ -2360,6 +2427,7 @@ function Keyframes() {
       @keyframes popIn { 0%{transform:scale(0)} 60%{transform:scale(1.12)} 100%{transform:scale(1)} }
       @keyframes wiggle { 0%,100%{transform:rotate(-6deg)} 50%{transform:rotate(6deg)} }
       @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+      @keyframes monbob { 0%,49%{transform:translateY(0)} 50%,100%{transform:translateY(-7%)} }
       @media (prefers-reduced-motion: reduce){ *{animation-duration:.001ms!important} }
     `}</style>
   );
