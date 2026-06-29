@@ -49,9 +49,10 @@ const CATS = {
 
 /* ---------- Tarefas iniciais ---------- */
 const BASE_TASKS = [
-  { id: "t_comida", key: "comida_mona", name: "Colocar comida para a Mona", desc: "Encha o potinho", xp: 10, category: "pet" },
-  { id: "t_agua", key: "agua_mona", name: "Tem água para a Mona", desc: "Água fresca no pote", xp: 5, category: "pet" },
-  { id: "t_areia", key: "areia", name: "Areia limpa", desc: "Caixa de areia em ordem", xp: 10, category: "pet" },
+  { id: "t_comida", key: "comida_mona", name: "Colocar comida para a Mona", desc: "Encha o potinho", xp: 10, category: "pet", need: "hunger" },
+  { id: "t_agua", key: "agua_mona", name: "Tem água para a Mona", desc: "Água fresca no pote", xp: 5, category: "pet", need: "thirst" },
+  { id: "t_areia", key: "areia", name: "Areia limpa", desc: "Caixa de areia em ordem", xp: 10, category: "pet", need: "hygiene" },
+  { id: "t_brincar", key: "brincar_mona", name: "Brincar com a Mona", desc: "Um tempinho de carinho e brincadeira", xp: 10, category: "pet", need: "fun" },
   { id: "t_guarda", key: "guarda_roupa", name: "Mona fora do guarda-roupa", desc: "Confira antes de fechar", xp: 10, category: "pet" },
   { id: "t_torneira", key: "torneiras", name: "Torneiras fechadas", desc: "Cozinha e banheiro", xp: 5, category: "casa" },
   { id: "t_filtro", key: "filtro", name: "Filtro fechado", desc: "Sem desperdício", xp: 5, category: "casa" },
@@ -143,6 +144,56 @@ function energyMood(e) {
   if (e >= 40) return { label: "De boa", color: C.gold };
   if (e >= 15) return { label: "Com fome…", color: C.ember };
   return { label: "Carente de carinho", color: "#c0392b" };
+}
+
+/* ---------- Tamagotchi (espelho do pet real) ---------- */
+const TAMA_DECAY = { hunger: 2.6, thirst: 3.0, hygiene: 2.2, fun: 2.4 }; // pontos por hora
+const TAMA_NEED_LABEL = { hunger: "Fome", thirst: "Água", hygiene: "Higiene", fun: "Felicidade" };
+function cl100(v) { return Math.max(0, Math.min(100, v)); }
+function freshTama() {
+  const now = Date.now();
+  return { startedAt: new Date().toISOString(), ts: now, hunger: 80, thirst: 80, hygiene: 90, fun: 80, sick: false };
+}
+function decayTama(t) {
+  const now = Date.now();
+  const hrs = Math.max(0, (now - (t.ts || now)) / 3600000);
+  return {
+    ...t,
+    hunger: cl100(t.hunger - TAMA_DECAY.hunger * hrs),
+    thirst: cl100(t.thirst - TAMA_DECAY.thirst * hrs),
+    hygiene: cl100(t.hygiene - TAMA_DECAY.hygiene * hrs),
+    fun: cl100(t.fun - TAMA_DECAY.fun * hrs),
+    ts: now,
+  };
+}
+function currentTama(d) {
+  return decayTama(d.tama || freshTama());
+}
+// versão que atualiza o estado salvo (usar dentro de setData)
+function settleTama(d) {
+  const t = decayTama(d.tama || freshTama());
+  if (t.hunger <= 3 || t.hygiene <= 3) t.sick = true;     // fica doente se muito negligenciada
+  d.tama = t;
+  return t;
+}
+function tamaAvg(t) { return Math.round((t.hunger + t.thirst + t.hygiene + t.fun) / 4); }
+function tamaImageKey(t, stageIndex) {
+  if (t.sick) return "triste";
+  const avg = tamaAvg(t);
+  const low = Math.min(t.hunger, t.thirst, t.hygiene, t.fun);
+  if (low < 12 || avg < 20) return "brava";
+  if (avg < 45) return "triste";
+  if (stageIndex >= 3 && avg >= 70) return "realeza";
+  if (avg < 70) return "sono";
+  return "feliz";
+}
+function tamaMoodLabel(t) {
+  if (t.sick) return { label: "Doente — dê remédio 💊", color: "#c0392b" };
+  const avg = tamaAvg(t);
+  if (avg >= 75) return { label: "Radiante e bem cuidada", color: C.xp };
+  if (avg >= 45) return { label: "De boa", color: C.gold };
+  if (avg >= 20) return { label: "Precisando de você", color: C.ember };
+  return { label: "Muito carente", color: "#c0392b" };
 }
 
 /* ---------- Mapa da jornada ---------- */
@@ -309,6 +360,7 @@ const DEFAULT_DATA = {
   cosmetics: { owned: [], equipped: {} },
   petEnergy: 100,
   petEnergyTs: Date.now(),
+  tama: freshTama(),
   hardMode: false,
   hardPenaltyNote: null,
   gameBest: 0,
@@ -348,6 +400,7 @@ function freshData() {
     gems: 0,
     petEnergy: 100,
     petEnergyTs: Date.now(),
+    tama: freshTama(),
   };
 }
 
@@ -429,6 +482,17 @@ export default function RpgDaVida({ user, onSignOut }) {
         if (!d.avatar || typeof d.avatar !== "object") d.avatar = { ...DEFAULT_AVATAR };
         if (!d.cosmetics || typeof d.cosmetics !== "object") d.cosmetics = { owned: [], equipped: {} };
         if (typeof d.petEnergy !== "number") { d.petEnergy = 100; d.petEnergyTs = Date.now(); }
+        if (!d.tama || typeof d.tama !== "object") d.tama = freshTama();
+        // marca missões de cuidado com seu "need" e garante a missão de brincar
+        if (Array.isArray(d.tasks)) {
+          const needByKey = { comida_mona: "hunger", agua_mona: "thirst", areia: "hygiene", brincar_mona: "fun" };
+          d.tasks = d.tasks.map((t) => (needByKey[t.key] && !t.need ? { ...t, need: needByKey[t.key] } : t));
+          if (!d.tasks.some((t) => t.key === "brincar_mona")) {
+            const idx = d.tasks.findIndex((t) => t.key === "areia");
+            const brincar = { id: "t_brincar", key: "brincar_mona", name: "Brincar com a Mona", desc: "Um tempinho de carinho e brincadeira", xp: 10, category: "pet", need: "fun" };
+            if (idx >= 0) d.tasks.splice(idx + 1, 0, brincar); else d.tasks.push(brincar);
+          }
+        }
         if (typeof d.hardMode !== "boolean") d.hardMode = false;
         if (typeof d.gameBest !== "number") d.gameBest = 0;
       }
@@ -496,6 +560,8 @@ export default function RpgDaVida({ user, onSignOut }) {
   const journeyStage = stageFor(JOURNEY, data.xpTotal);
   const petEnergy = currentEnergy(data);
   const petSad = petEnergy < 40;
+  const tama = currentTama(data);
+  const tAvg = tamaAvg(tama);
 
   const statsSnap = {
     tasksCompleted: data.tasksCompleted, level, xpTotal: data.xpTotal,
@@ -541,6 +607,12 @@ export default function RpgDaVida({ user, onSignOut }) {
           markActive(d);
           bumpEnergy(d, ENERGY_RECOVER_TASK);
           d.hardPenaltyNote = null;
+
+          // Tamagotchi: cuidar da Mona real enche os medidores da Mona virtual
+          settleTama(d);
+          if (task.need) d.tama[task.need] = 100;
+          if (task.category === "pet") d.tama.fun = cl100(d.tama.fun + 12);
+          if (d.tama.hunger > 20 && d.tama.thirst > 20 && d.tama.hygiene > 20) d.tama.sick = false;
 
           // remédios do dia completos?
           const medIds = (d.meds || []).map((m) => m.id);
@@ -640,6 +712,20 @@ export default function RpgDaVida({ user, onSignOut }) {
     if (award > 0 && data.soundOn) sound.coin();
     return award;
   };
+
+  // interações livres do Tamagotchi (não dão XP/ouro; só cuidam da Mona virtual)
+  const tamaCare = (action) => setData((prev) => {
+    const d = { ...prev };
+    settleTama(d);
+    const t = d.tama;
+    if (action === "carinho") t.fun = cl100(t.fun + 8);
+    else if (action === "limpar") t.hygiene = cl100(t.hygiene + 25);
+    else if (action === "remedio") { t.sick = false; t.fun = cl100(t.fun + 5); }
+    else if (action === "brincar_win") t.fun = cl100(t.fun + 18);
+    else if (action === "brincar_ok") t.fun = cl100(t.fun + 6);
+    d.tama = { ...t };
+    return d;
+  });
 
   /* ---------- água em copos de 250ml (XP só até a meta, sem farm) ---------- */
   const addWater = (delta) => {
@@ -748,8 +834,8 @@ export default function RpgDaVida({ user, onSignOut }) {
             openGame: () => setShowGame(true) }} />
         )}
         {tab === "loja" && <Loja data={data} buyReward={buyReward} buyCosmetic={buyCosmetic} update={update} />}
-        {tab === "pet" && <Pet data={data} petStage={petStage} petSad={petSad} petEnergy={petEnergy} update={update} />}
-        {tab === "avatar" && <Avatar data={data} level={level} journeyStage={journeyStage} petEnergy={petEnergy} update={update} />}
+        {tab === "pet" && <Pet data={data} petStage={petStage} tama={tama} tamaCare={tamaCare} update={update} />}
+        {tab === "avatar" && <Avatar data={data} level={level} journeyStage={journeyStage} petEnergy={tAvg} update={update} />}
         {tab === "saude" && <Saude data={data} addWater={addWater} toggleTask={toggleTask} update={update}
           medDone={(() => { const ids = (data.meds || []).map((m) => m.id); return ids.length > 0 && ids.every((id) => data.doneToday.includes(id)); })()} />}
         {tab === "stats" && <Stats data={data} level={level} playerClass={playerClass} sound={sound} update={update} onSignOut={onSignOut} user={user} />}
@@ -1376,7 +1462,7 @@ function PetDisplay({ data, energy = 100, stageIndex = 0, size = 150, imgKeyOver
   return <PetAvatar size={size} species={pet.species} color={pet.color} sad={energy < 40} stageIndex={stageIndex} hat={hat} glasses={glasses} />;
 }
 
-function Pet({ data, petStage, petSad, petEnergy = 100, update }) {
+function Pet({ data, petStage, tama, tamaCare, update }) {
   const pet = data.pet || DEFAULT_PET;
   const idx = PET_STAGES.indexOf(petStage);
   const next = PET_STAGES[idx + 1];
@@ -1385,20 +1471,39 @@ function Pet({ data, petStage, petSad, petEnergy = 100, update }) {
   const [editingName, setEditingName] = useState(false);
   const [nameVal, setNameVal] = useState(pet.name);
   const [, setTick] = useState(0);
-  useEffect(() => { const t = setInterval(() => setTick((x) => x + 1), 60000); return () => clearInterval(t); }, []);
-  const mood = energyMood(petEnergy);
-  const energyMsg = petEnergy >= 70
-    ? `${pet.name} está radiante e cheio de energia!`
-    : petEnergy >= 40
-      ? `${pet.name} está de boa — uma missão deixa tudo melhor.`
-      : petEnergy >= 15
-        ? `${pet.name} está com fome de atenção. Que tal uma missão? 🍽️`
-        : `${pet.name} sente muita saudade. Um passinho hoje já reanima. 💛`;
+  const [game, setGame] = useState(null); // null | 'play' | 'win' | 'ok'
+  useEffect(() => { const t = setInterval(() => setTick((x) => x + 1), 20000); return () => clearInterval(t); }, []);
+
+  // recalcula ao vivo (decai com o tempo enquanto a aba está aberta)
+  const t = decayTama(data.tama || freshTama());
+  const mood = tamaMoodLabel(t);
+  const imgKey = tamaImageKey(t, idx);
+  const poop = t.hygiene < 45 && !t.sick;
+  const ageDays = Math.max(0, Math.floor((Date.now() - new Date(t.startedAt || Date.now()).getTime()) / 86400000));
+
+  const METERS = [
+    { key: "hunger", label: "Fome", emoji: "🍖", color: "#e8843a", nudge: "Hora de pôr comida pra Mona de verdade 🍖" },
+    { key: "thirst", label: "Água", emoji: "💧", color: "#3a8fd8", nudge: "Troca a aguinha da Mona 💧" },
+    { key: "hygiene", label: "Higiene", emoji: "🧹", color: "#2a8c4a", nudge: "A caixa de areia pede limpeza 🧹" },
+    { key: "fun", label: "Felicidade", emoji: "🧶", color: C.rose, nudge: "Ela quer brincar — dá uma atenção 🧶" },
+  ];
+  const lows = METERS.filter((m) => t[m.key] < 35).sort((a, b) => t[a.key] - t[b.key]);
+
+  const play = (pick) => {
+    const monaPick = Math.random() < 0.5 ? "L" : "R";
+    if (pick === monaPick) { tamaCare("brincar_win"); setGame("win"); }
+    else { tamaCare("brincar_ok"); setGame("ok"); }
+  };
 
   return (
     <div className="space-y-4">
       <Panel style={{ background: `linear-gradient(160deg, #f0f7ff, ${C.parch2})` }} className="text-center">
-        <div className="flex justify-center"><PetDisplay data={data} energy={petEnergy} stageIndex={idx} size={170} /></div>
+        <div className="relative inline-block">
+          <PetDisplay data={data} stageIndex={idx} size={170} imgKeyOverride={imgKey} />
+          {t.sick && <span className="absolute" style={{ top: 4, right: 6, fontSize: 30 }}>🤒</span>}
+          {poop && <span className="absolute" style={{ bottom: 8, left: 8, fontSize: 28 }}>💩</span>}
+        </div>
+
         {editingName ? (
           <input autoFocus value={nameVal} onChange={(e) => setNameVal(e.target.value)}
             onBlur={() => { setPet({ name: nameVal.trim() || "Pet" }); setEditingName(false); }}
@@ -1409,57 +1514,77 @@ function Pet({ data, petStage, petSad, petEnergy = 100, update }) {
           <button onClick={() => { setNameVal(pet.name); setEditingName(true); }} style={{ color: C.ink }}
             className="mt-1 font-serif text-2xl font-black">{pet.name} ✎</button>
         )}
-        <div style={{ color: C.rose }} className="font-bold">{petStage.name}</div>
+        <div style={{ color: mood.color }} className="font-bold">{mood.label}</div>
+        <div style={{ color: C.inkSoft }} className="text-xs">{petStage.name} · {ageDays} {ageDays === 1 ? "dia" : "dias"} de vida</div>
 
-        {/* energia (estilo Pou) */}
-        <div className="mt-3">
-          <div className="mb-1 flex justify-between text-xs font-bold" style={{ color: C.ink }}>
-            <span>⚡ Energia · {mood.label}</span><span>{Math.round(petEnergy)}%</span>
-          </div>
-          <div style={{ background: "rgba(58,42,24,.18)" }} className="h-4 w-full overflow-hidden rounded-full">
-            <div style={{ width: `${petEnergy}%`, background: mood.color, transition: "width .6s" }} className="h-full rounded-full" />
-          </div>
+        {/* medidores */}
+        <div className="mt-4 space-y-2 text-left">
+          {METERS.map((m) => {
+            const v = Math.round(t[m.key]);
+            return (
+              <div key={m.key}>
+                <div className="mb-0.5 flex justify-between text-xs font-bold" style={{ color: C.ink }}>
+                  <span>{m.emoji} {m.label}</span><span style={{ color: v < 25 ? "#c0392b" : C.inkSoft }}>{v}%</span>
+                </div>
+                <div style={{ background: "rgba(58,42,24,.18)" }} className="h-3 w-full overflow-hidden rounded-full">
+                  <div style={{ width: `${v}%`, background: m.color, transition: "width .5s" }} className="h-full rounded-full" />
+                </div>
+              </div>
+            );
+          })}
         </div>
-        <p style={{ color: C.inkSoft }} className="mt-2 text-sm">{energyMsg}</p>
-
-        {next && (
-          <div className="mt-3">
-            <div className="mb-1 flex justify-between text-xs font-bold" style={{ color: C.ink }}>
-              <span>Para {next.name}</span><span>{prog}%</span>
-            </div>
-            <div style={{ background: "rgba(58,42,24,.18)" }} className="h-3 w-full overflow-hidden rounded-full">
-              <div style={{ width: `${prog}%`, background: `linear-gradient(90deg, ${C.rose}, ${C.gold})`, transition: "width .6s" }} className="h-full rounded-full" />
-            </div>
-          </div>
-        )}
       </Panel>
 
-      {/* personalização */}
+      {/* lembrete de cuidar da Mona REAL */}
+      {(lows.length > 0 || t.sick) && (
+        <Panel style={{ background: "#fff7e6", borderColor: C.ember }}>
+          <div style={{ color: C.ink }} className="text-sm">
+            <b>A Mona te chama 🐾</b> — cuidar dela aqui é lembrete pra cuidar dela de verdade:
+            <ul className="mt-1 list-disc pl-5">
+              {t.sick && <li>Ela não está bem. Carinho e cuidado ajudam a recuperar. 💛</li>}
+              {lows.slice(0, 3).map((m) => <li key={m.key}>{m.nudge}</li>)}
+            </ul>
+          </div>
+        </Panel>
+      )}
+
+      {/* interações */}
       <Panel>
-        <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Espécie</div>
-        <div className="mb-4 flex gap-2">
-          {PET_SPECIES.map((s) => (
-            <button key={s.id} onClick={() => setPet({ species: s.id })}
-              style={{ background: pet.species === s.id ? C.gold : "rgba(0,0,0,.06)", color: pet.species === s.id ? C.ink : C.inkSoft }}
-              className="flex-1 rounded-xl py-2 text-sm font-bold">{s.emoji}<br />{s.label}</button>
-          ))}
-        </div>
-        {IMG_SPECIES.includes(pet.species) ? (
-          <p style={{ color: C.inkSoft }} className="text-xs">Esta espécie tem ilustração própria que muda com o humor e a fase. 🎨</p>
+        <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Cuidar agora</div>
+        {game ? (
+          <div className="text-center">
+            {game === "play" ? (
+              <>
+                <div style={{ color: C.ink }} className="mb-2 text-sm font-bold">Pra que lado a Mona vai pular? 🐱</div>
+                <div className="flex justify-center gap-3">
+                  <button onClick={() => play("L")} style={{ background: C.gold, color: C.ink }} className="rounded-xl px-6 py-3 text-2xl active:scale-90 transition">⬅️</button>
+                  <button onClick={() => play("R")} style={{ background: C.gold, color: C.ink }} className="rounded-xl px-6 py-3 text-2xl active:scale-90 transition">➡️</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-3xl">{game === "win" ? "🎉" : "😸"}</div>
+                <div style={{ color: C.ink }} className="mt-1 text-sm font-bold">{game === "win" ? "Acertou! A Mona amou brincar com você!" : "Quase! Ela se divertiu mesmo assim."}</div>
+                <button onClick={() => setGame(null)} style={{ color: C.goldDeep }} className="mt-2 text-sm font-bold">voltar</button>
+              </>
+            )}
+          </div>
         ) : (
-          <>
-            <div style={{ color: C.ink }} className="mb-2 font-serif font-bold">Cor</div>
-            <div className="flex flex-wrap gap-2">
-              {PET_COLORS.map((c) => (
-                <button key={c} onClick={() => setPet({ color: c })}
-                  style={{ background: c, border: pet.color === c ? `3px solid ${C.goldDeep}` : "2px solid rgba(0,0,0,.15)" }}
-                  className="h-9 w-9 rounded-full active:scale-90 transition" />
-              ))}
-            </div>
-          </>
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={() => tamaCare("carinho")} style={{ background: "rgba(0,0,0,.06)", color: C.ink }} className="rounded-xl py-2.5 text-sm font-bold active:scale-95 transition">🤚 Carinho</button>
+            <button onClick={() => tamaCare("limpar")} style={{ background: "rgba(0,0,0,.06)", color: C.ink }} className="rounded-xl py-2.5 text-sm font-bold active:scale-95 transition">🚿 Limpar</button>
+            <button onClick={() => setGame("play")} style={{ background: "rgba(0,0,0,.06)", color: C.ink }} className="rounded-xl py-2.5 text-sm font-bold active:scale-95 transition">🎮 Brincar</button>
+            {t.sick
+              ? <button onClick={() => tamaCare("remedio")} style={{ background: C.xpDeep, color: "#fff" }} className="rounded-xl py-2.5 text-sm font-bold active:scale-95 transition">💊 Remédio</button>
+              : <div className="rounded-xl py-2.5 text-center text-xs" style={{ background: "rgba(0,0,0,.03)", color: C.inkSoft }}>😺 saudável</div>}
+          </div>
         )}
+        <p style={{ color: C.inkSoft }} className="mt-3 text-xs">
+          A Mona virtual é o espelho da sua Mona real: as missões de <b>comida, água, areia e brincar</b> enchem os medidores. Cuide de uma e a outra agradece. 💛 (Ela fica triste/doente, mas <b>nunca</b> morre.)
+        </p>
       </Panel>
 
+      {/* evolução */}
       <Panel>
         <div style={{ color: C.ink }} className="mb-3 font-serif font-bold">Evolução</div>
         <div className="space-y-2">
