@@ -8,7 +8,7 @@ import { pushSupported, currentSubscription, enablePush, disablePush, sendTestLo
 import RoutineDefense from "./RoutineDefense";
 import { loadSave, persistSave } from "@/lib/save";
 import {
-  Sword, Store, Heart, BarChart3, Crown, Flame,
+  Sword, Store, Heart, BarChart3, Crown, Flame, Map,
   Plus, Minus, Trash2, X, Target, Zap, Volume2, VolumeX, Coins, Check,
   Trophy, Skull, Droplet, Pill, Sun, Moon, Utensils, LogOut, Pencil,
   Gem, PawPrint, Smile, Mail, Bell,
@@ -47,22 +47,42 @@ const CATS = {
   saude: { label: "Saúde", emoji: "💙", color: "#34b3a0" },
 };
 
+/* ---------- Ícones e cores das missões ---------- */
+const TASK_ICONS = [
+  "⚔️","🛡️","🔥","✨","🎯","📦","🧹","🧼","🚿","🛁","🍽️","🍳","☕","🥤","💧","🍎",
+  "💊","🩺","🏃","🧘","😴","🛏️","🦷","🚮","🗑️","🔑","👛","📱","💡","🚰","🪟","❄️",
+  "🐾","🐱","🐶","🍖","🧶","📚","💻","✍️","📞","🧺","👕","🛒","🌱","🎵","🎮","💛",
+];
+const TASK_COLORS = ["#c94f5e", "#e8843a", "#e8b339", "#57a05a", "#34b3a0", "#4b8fd6", "#8a6bd1", "#6d5643"];
+const DEFAULT_TASK_ICON = {
+  comida_mona: "🍖", agua_mona: "💧", areia: "🧹", brincar_mona: "🧶", guarda_roupa: "🐱",
+  torneiras: "🚰", filtro: "🥤", luzes: "💡", janela: "🪟", geladeira: "❄️", lixo: "🗑️",
+  chave: "🔑", carteira: "👛", celular: "📱",
+};
+const CAT_FALLBACK_ICON = { pet: "🐾", casa: "🏠", pessoal: "🎒", saude: "💙" };
+function taskIcon(t) {
+  return t?.icon || DEFAULT_TASK_ICON[t?.key] || CAT_FALLBACK_ICON[t?.category] || "⚔️";
+}
+function taskColor(t) {
+  return t?.color || CATS[t?.category]?.color || C.gold;
+}
+
 /* ---------- Tarefas iniciais ---------- */
 const BASE_TASKS = [
-  { id: "t_comida", key: "comida_mona", name: "Colocar comida para a Mona", desc: "Encha o potinho", xp: 10, category: "pet", need: "hunger" },
-  { id: "t_agua", key: "agua_mona", name: "Tem água para a Mona", desc: "Água fresca no pote", xp: 5, category: "pet", need: "thirst" },
-  { id: "t_areia", key: "areia", name: "Areia limpa", desc: "Caixa de areia em ordem", xp: 10, category: "pet", need: "hygiene" },
-  { id: "t_brincar", key: "brincar_mona", name: "Brincar com a Mona", desc: "Um tempinho de carinho e brincadeira", xp: 10, category: "pet", need: "fun" },
-  { id: "t_guarda", key: "guarda_roupa", name: "Mona fora do guarda-roupa", desc: "Confira antes de fechar", xp: 10, category: "pet" },
-  { id: "t_torneira", key: "torneiras", name: "Torneiras fechadas", desc: "Cozinha e banheiro", xp: 5, category: "casa" },
-  { id: "t_filtro", key: "filtro", name: "Filtro fechado", desc: "Sem desperdício", xp: 5, category: "casa" },
-  { id: "t_luzes", key: "luzes", name: "Luzes desligadas", desc: "Economia ligada", xp: 5, category: "casa" },
-  { id: "t_janela", key: "janela", name: "Janela fechada", desc: "Casa segura", xp: 5, category: "casa" },
-  { id: "t_geladeira", key: "geladeira", name: "Geladeira fechada", desc: "Porta bem encostada", xp: 5, category: "casa" },
-  { id: "t_lixo", key: "lixo", name: "Lixo para fora", desc: "Só ter, qui e sáb", xp: 15, category: "casa", days: [2, 4, 6] },
-  { id: "t_chave", key: "chave", name: "Pegou a chave", desc: "Antes de sair", xp: 5, category: "pessoal" },
-  { id: "t_carteira", key: "carteira", name: "Pegou a carteira", desc: "Antes de sair", xp: 5, category: "pessoal" },
-  { id: "t_celular", key: "celular", name: "Pegou o celular", desc: "Antes de sair", xp: 5, category: "pessoal" },
+  { id: "t_comida", key: "comida_mona", name: "Colocar comida para a Mona", desc: "Encha o potinho", xp: 10, category: "pet", need: "hunger", icon: "🍖" },
+  { id: "t_agua", key: "agua_mona", name: "Tem água para a Mona", desc: "Água fresca no pote", xp: 5, category: "pet", need: "thirst", icon: "💧" },
+  { id: "t_areia", key: "areia", name: "Areia limpa", desc: "Caixa de areia em ordem", xp: 10, category: "pet", need: "hygiene", icon: "🧹" },
+  { id: "t_brincar", key: "brincar_mona", name: "Brincar com a Mona", desc: "Um tempinho de carinho e brincadeira", xp: 10, category: "pet", need: "fun", icon: "🧶" },
+  { id: "t_guarda", key: "guarda_roupa", name: "Mona fora do guarda-roupa", desc: "Confira antes de fechar", xp: 10, category: "pet", icon: "🐱" },
+  { id: "t_torneira", key: "torneiras", name: "Torneiras fechadas", desc: "Cozinha e banheiro", xp: 5, category: "casa", icon: "🚰" },
+  { id: "t_filtro", key: "filtro", name: "Filtro fechado", desc: "Sem desperdício", xp: 5, category: "casa", icon: "🥤" },
+  { id: "t_luzes", key: "luzes", name: "Luzes desligadas", desc: "Economia ligada", xp: 5, category: "casa", icon: "💡" },
+  { id: "t_janela", key: "janela", name: "Janela fechada", desc: "Casa segura", xp: 5, category: "casa", icon: "🪟" },
+  { id: "t_geladeira", key: "geladeira", name: "Geladeira fechada", desc: "Porta bem encostada", xp: 5, category: "casa", icon: "❄️" },
+  { id: "t_lixo", key: "lixo", name: "Lixo para fora", desc: "Só ter, qui e sáb", xp: 15, category: "casa", days: [2, 4, 6], icon: "🗑️" },
+  { id: "t_chave", key: "chave", name: "Pegou a chave", desc: "Antes de sair", xp: 5, category: "pessoal", icon: "🔑" },
+  { id: "t_carteira", key: "carteira", name: "Pegou a carteira", desc: "Antes de sair", xp: 5, category: "pessoal", icon: "👛" },
+  { id: "t_celular", key: "celular", name: "Pegou o celular", desc: "Antes de sair", xp: 5, category: "pessoal", icon: "📱" },
 ];
 
 /* ---------- Saúde ---------- */
@@ -410,6 +430,7 @@ const DEFAULT_DATA = {
   bossesDefeated: [],
   soundOn: true,
   streakBrokenNote: false,
+  gbMode: false,
 };
 
 /** Estado novo com missões e refeições já semeadas. */
@@ -468,7 +489,7 @@ export default function RpgDaVida({ user, onSignOut }) {
   const supabase = getSupabase();
   const userId = user.id;
   const [data, setData] = useState(null);
-  const [tab, setTab] = useState("aventura");
+  const [tab, setTab] = useState("vila");
   const [pops, setPops] = useState([]);        // popups flutuantes
   const [particles, setParticles] = useState([]);
   const [levelUpBanner, setLevelUpBanner] = useState(null);
@@ -866,10 +887,15 @@ export default function RpgDaVida({ user, onSignOut }) {
       {/* conteúdo */}
       <main className="mx-auto w-full max-w-md px-4 pb-28 pt-4">
         <InstallHint />
+        {tab === "vila" && <VillageMap go={setTab} />}
         {tab === "aventura" && (
-          <Aventura {...{ data, level, xpInLevel, xpForNext, pct, playerClass, petStage, journeyStage,
-            visibleTasks, quickOnly, setQuickOnly, toggleTask, setFocusMode, pending, allTasks: todayTasks, update,
-            openGame: () => setShowGame(true) }} />
+          data.gbMode
+            ? <GameBoyHome data={data} level={level} xpInLevel={xpInLevel} xpForNext={xpForNext} pct={pct}
+                playerClass={playerClass} tama={tama} tasks={todayTasks} toggleTask={toggleTask}
+                exit={() => update({ gbMode: false })} />
+            : <Aventura {...{ data, level, xpInLevel, xpForNext, pct, playerClass, petStage, journeyStage,
+                visibleTasks, quickOnly, setQuickOnly, toggleTask, setFocusMode, pending, allTasks: todayTasks, update,
+                openGame: () => setShowGame(true) }} />
         )}
         {tab === "loja" && <Loja data={data} buyReward={buyReward} buyCosmetic={buyCosmetic} update={update} />}
         {tab === "pet" && <Pet data={data} tama={tama} tamaCare={tamaCare} pickStarter={pickStarter} update={update} />}
@@ -884,6 +910,7 @@ export default function RpgDaVida({ user, onSignOut }) {
         <div style={{ background: C.parch, border: `3px solid ${C.goldDeep}`, boxShadow: "0 -6px 24px rgba(0,0,0,.4)" }}
           className="flex items-center justify-between rounded-2xl px-2 py-2">
           {[
+            { k: "vila", icon: Map, label: "Vila" },
             { k: "aventura", icon: Sword, label: "Missões" },
             { k: "pet", icon: PawPrint, label: "Pet" },
             { k: "avatar", icon: Smile, label: "Avatar" },
@@ -928,6 +955,126 @@ function Panel({ children, style, className = "" }) {
 }
 function Tag({ children, color }) {
   return <span style={{ background: color, color: "#fff" }} className="rounded-full px-2 py-0.5 text-[11px] font-bold">{children}</span>;
+}
+
+/* ---------- VILA (mapa inicial) ---------- */
+function VillageMap({ go }) {
+  const spots = [
+    { tab: "aventura", label: "Missões", left: 15, top: 10, w: 21, h: 15 },
+    { tab: "loja", label: "Loja", left: 57, top: 7, w: 29, h: 22 },
+    { tab: "pet", label: "Monstro", left: 9, top: 32, w: 25, h: 21 },
+    { tab: "saude", label: "Boticário", left: 67, top: 33, w: 27, h: 20 },
+    { tab: "stats", label: "Torre do Mago", left: 20, top: 65, w: 25, h: 28 },
+  ];
+  return (
+    <div>
+      <div className="font-pixel mb-2 text-center" style={{ color: C.gold, fontSize: 13, textShadow: "1px 1px 0 rgba(0,0,0,.5)" }}>VILA DO HEROI</div>
+      <div style={{ position: "relative", width: "100%" }}>
+        <img src="/vila.jpg" alt="Vila do Herói" style={{ width: "100%", display: "block", borderRadius: 12, border: `3px solid ${C.goldDeep}` }} />
+        {spots.map((s) => (
+          <button key={s.tab} onClick={() => go(s.tab)} aria-label={s.label}
+            style={{ position: "absolute", left: `${s.left}%`, top: `${s.top}%`, width: `${s.w}%`, height: `${s.h}%` }}
+            className="active:scale-95 transition">
+            <span className="font-pixel" style={{ position: "absolute", left: "50%", bottom: "-12px", transform: "translateX(-50%)", whiteSpace: "nowrap", fontSize: 7, color: "#fff", background: "rgba(20,16,32,.85)", padding: "2px 4px", borderRadius: 3 }}>{s.label}</span>
+          </button>
+        ))}
+        <button onClick={() => go("stats")} aria-label="Mestre"
+          style={{ position: "absolute", left: "45%", top: "79%", width: "12%" }} className="active:scale-95 transition">
+          <img src="/mestre_azul.png" alt="Mestre" className="imgpx" style={{ width: "100%", filter: "drop-shadow(0 2px 3px rgba(0,0,0,.5))" }} />
+        </button>
+      </div>
+      <div className="font-pixel mt-3 text-center" style={{ color: C.inkSoft, fontSize: 8 }}>Toque num predio pra entrar</div>
+    </div>
+  );
+}
+
+/* ---------- MODO GAME BOY (skin retrô da tela principal) ---------- */
+const GB = {
+  screen: "#c4cfa1", panel: "#eef2cf", ink: "#20301a", dim: "#5c6b3a",
+  gold: "#b9852a", red: "#b23a2a", green: "#4a8c3a",
+};
+const noac = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+const CAT_MSG = {
+  pet: ["Mona esta orgulhosa de voce!", "Voce cuidou bem da Mona!"],
+  casa: ["Monstro da Pia Aberta derrotado!", "Casa protegida com sucesso!", "Geladeira selada!"],
+  pessoal: ["Item essencial garantido!", "Heroi preparado pra aventura!"],
+  saude: ["Sua saude agradece!", "Buff de vida ativado!"],
+};
+function GBBox({ children, style, className = "" }) {
+  return (
+    <div style={{ background: GB.panel, border: `3px solid ${GB.ink}`, boxShadow: `inset 0 0 0 3px ${GB.panel}, inset 0 0 0 5px ${GB.ink}`, borderRadius: 6, ...style }}
+      className={`p-4 ${className}`}>{children}</div>
+  );
+}
+function GameBoyHome({ data, level, xpInLevel, xpForNext, pct, playerClass, tama, tasks, toggleTask, exit }) {
+  const [dialog, setDialog] = useState({ title: "BEM-VINDO, HEROI!", body: "Toque numa missao pra comecar a aventura." });
+  const isDone = (id) => data.doneToday.includes(id);
+  const pendingFirst = tasks.find((t) => !isDone(t.id));
+  const handle = (t) => {
+    const already = isDone(t.id);
+    toggleTask(t);
+    if (!already) {
+      const pool = CAT_MSG[t.category] || ["Missao concluida!"];
+      setDialog({ title: `+${t.xp} XP   +${t.xp} OURO`, body: pool[Math.floor(Math.random() * pool.length)] });
+    }
+  };
+  return (
+    <div className="font-pixel" style={{ color: GB.ink }}>
+      <div className="mb-2 flex items-center justify-between">
+        <span style={{ fontSize: 9, color: GB.dim }}>MODO GAME BOY</span>
+        <button onClick={exit} style={{ fontSize: 9, color: GB.ink, background: GB.panel, border: `2px solid ${GB.ink}` }} className="rounded px-2 py-1 active:opacity-70">SAIR X</button>
+      </div>
+
+      <GBBox className="mb-3">
+        <div style={{ fontSize: 13, lineHeight: 1.4 }}>{noac(data.playerName || "HEROI").toUpperCase()}</div>
+        <div style={{ fontSize: 8, color: GB.dim }} className="mt-1">{noac(playerClass?.name || "AVENTUREIRO").toUpperCase()}</div>
+        <div className="mt-3 flex items-center gap-2" style={{ fontSize: 10 }}>
+          <span>Lv{level}</span>
+          <div style={{ flex: 1, height: 12, border: `2px solid ${GB.ink}`, background: GB.screen }}>
+            <div style={{ width: `${pct}%`, height: "100%", background: GB.green }} />
+          </div>
+        </div>
+        <div className="mt-2 flex justify-between" style={{ fontSize: 8, color: GB.dim }}>
+          <span>XP {xpInLevel}/{xpForNext}</span>
+          <span>OURO {data.gold}  GEM {data.gems}  {data.currentStreak}d</span>
+        </div>
+      </GBBox>
+
+      <GBBox className="mb-3" style={{ textAlign: "center" }}>
+        {tama && tama.type ? (
+          <>
+            <img src={monSrc(tama.type, tama.stage)} alt="mon" className="imgpx" style={{ width: 92, height: 92, margin: "0 auto", animation: "monbob 0.9s steps(1) infinite" }} />
+            <div style={{ fontSize: 9 }} className="mt-1">{noac(data.pet?.name || "MONSTRO").toUpperCase()} - {noac(MON_STAGES[tama.stage]).toUpperCase()}</div>
+          </>
+        ) : (
+          <div style={{ fontSize: 9, color: GB.dim }} className="py-6">Escolha seu ovo na aba PET</div>
+        )}
+      </GBBox>
+
+      <GBBox className="mb-3">
+        <div style={{ fontSize: 9 }} className="mb-3">- MISSOES DE HOJE -</div>
+        <div className="space-y-2">
+          {tasks.length === 0 && <div style={{ fontSize: 9, color: GB.dim }}>Sem missoes hoje. Descanse, heroi!</div>}
+          {tasks.map((t) => {
+            const d = isDone(t.id);
+            const cur = !d && t === pendingFirst;
+            return (
+              <button key={t.id} onClick={() => handle(t)} className="flex w-full items-center justify-between text-left active:opacity-60"
+                style={{ fontSize: 10, lineHeight: 1.5, color: d ? GB.dim : GB.ink }}>
+                <span style={{ textDecoration: d ? "line-through" : "none" }}>{cur ? "\u25B6" : "\u00A0\u00A0"} {d ? "[X]" : "[ ]"} {noac(t.name)}</span>
+                <span style={{ color: GB.gold, marginLeft: 8, whiteSpace: "nowrap" }}>+{t.xp}</span>
+              </button>
+            );
+          })}
+        </div>
+      </GBBox>
+
+      <GBBox>
+        <div style={{ fontSize: 11 }}>{dialog.title}</div>
+        <div style={{ fontSize: 9, color: GB.dim, lineHeight: 1.6 }} className="mt-2">{noac(dialog.body)} {"\u25BC"}</div>
+      </GBBox>
+    </div>
+  );
 }
 
 /* ---------- AVENTURA (tela principal) ---------- */
@@ -1086,12 +1233,14 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
             return (
               <div key={t.id} className="flex items-center gap-2">
                 <button onClick={() => (editMode ? setEditingTask(t) : toggleTask(t))}
-                  style={{ background: done ? "rgba(244,230,197,.45)" : C.parch, border: `3px solid ${done ? C.xpDeep : C.goldDeep}`, boxShadow: done ? "none" : "0 4px 0 rgba(0,0,0,.2)" }}
-                  className="flex flex-1 items-center gap-3 rounded-2xl p-3 text-left active:scale-[.98] transition">
+                  style={{ background: done ? "rgba(244,230,197,.45)" : C.parch, border: `3px solid ${done ? C.xpDeep : C.goldDeep}`, borderLeft: `7px solid ${taskColor(t)}`, boxShadow: done ? "none" : "0 4px 0 rgba(0,0,0,.2)" }}
+                  className="flex flex-1 items-center gap-2.5 rounded-2xl p-3 text-left active:scale-[.98] transition">
                   <span style={{ background: done ? C.xp : "transparent", border: `2px solid ${done ? C.xpDeep : C.inkSoft}`, color: "#fff" }}
                     className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg">
                     {editMode ? <Pencil size={14} style={{ color: C.inkSoft }} /> : (done && <Check size={18} strokeWidth={3} />)}
                   </span>
+                  <span style={{ background: taskColor(t) + "2e", opacity: done && !editMode ? 0.5 : 1 }}
+                    className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-lg">{taskIcon(t)}</span>
                   <span className="min-w-0 flex-1">
                     <span style={{ color: C.ink, textDecoration: done && !editMode ? "line-through" : "none", opacity: done && !editMode ? 0.6 : 1 }}
                       className="block font-bold leading-tight">{t.name}</span>
@@ -1146,22 +1295,56 @@ function TaskForm({ initial, onCancel, onSave }) {
   const [xp, setXp] = useState(initial?.xp || 10);
   const [cat, setCat] = useState(initial?.category || "casa");
   const [days, setDays] = useState(initial?.days || []);
+  const [icon, setIcon] = useState(initial ? taskIcon(initial) : "⚔️");
+  const [color, setColor] = useState(initial?.color || TASK_COLORS[2]);
   const WD = [["Dom", 0], ["Seg", 1], ["Ter", 2], ["Qua", 3], ["Qui", 4], ["Sex", 5], ["Sáb", 6]];
   const toggleDay = (n) => setDays((d) => (d.includes(n) ? d.filter((x) => x !== n) : [...d, n].sort((a, b) => a - b)));
   const cats = Object.entries(CATS).filter(([k]) => k !== "saude");
   const submit = () => {
     if (!name.trim()) return;
-    const t = { ...(initial || {}), id: initial?.id || "c_" + Math.random().toString(36).slice(2), name: name.trim(), desc: desc.trim(), xp, category: cat };
+    const t = { ...(initial || {}), id: initial?.id || "c_" + Math.random().toString(36).slice(2), name: name.trim(), desc: desc.trim(), xp, category: cat, icon, color };
     if (days.length) t.days = days; else delete t.days;
     onSave(t);
   };
   return (
     <Panel>
       <div style={{ color: C.ink }} className="font-serif font-bold mb-2">{initial ? "Editar missão" : "Nova missão"}</div>
+
+      {/* prévia */}
+      <div className="mb-3 flex items-center gap-3 rounded-2xl p-3" style={{ background: "rgba(0,0,0,.04)", borderLeft: `6px solid ${color}` }}>
+        <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl text-xl" style={{ background: color + "33" }}>{icon}</span>
+        <span style={{ color: C.ink }} className="font-bold">{name.trim() || "Sua missão"}</span>
+      </div>
+
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome da missão"
         style={{ borderColor: C.goldDeep, color: C.ink }} className="mb-2 w-full rounded-xl border-2 bg-white/60 px-3 py-2 outline-none" />
       <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Descrição (opcional)"
         style={{ borderColor: C.goldDeep, color: C.ink }} className="mb-2 w-full rounded-xl border-2 bg-white/60 px-3 py-2 outline-none" />
+
+      {/* ícone */}
+      <div className="mb-3">
+        <div style={{ color: C.inkSoft }} className="mb-1 text-xs font-bold">Ícone</div>
+        <div className="flex flex-wrap gap-1.5" style={{ maxHeight: 132, overflowY: "auto" }}>
+          {TASK_ICONS.map((ic) => (
+            <button key={ic} onClick={() => setIcon(ic)}
+              style={{ background: icon === ic ? color + "44" : "rgba(0,0,0,.05)", border: icon === ic ? `2px solid ${color}` : "2px solid transparent" }}
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-lg active:scale-90 transition">{ic}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* cor */}
+      <div className="mb-3">
+        <div style={{ color: C.inkSoft }} className="mb-1 text-xs font-bold">Cor</div>
+        <div className="flex flex-wrap gap-2">
+          {TASK_COLORS.map((c) => (
+            <button key={c} onClick={() => setColor(c)}
+              style={{ background: c, border: color === c ? `3px solid ${C.ink}` : "2px solid rgba(0,0,0,.15)" }}
+              className="h-8 w-8 rounded-full active:scale-90 transition" />
+          ))}
+        </div>
+      </div>
+
       <div className="mb-2 flex gap-2">
         {cats.map(([k, v]) => (
           <button key={k} onClick={() => setCat(k)} style={{ background: cat === k ? v.color : "rgba(0,0,0,.06)", color: cat === k ? "#fff" : C.ink }}
@@ -1215,7 +1398,8 @@ function FocusOverlay({ pending, onClose, onDone }) {
       className="fixed inset-0 z-50 flex flex-col items-center justify-center px-8 text-center">
       <button onClick={onClose} style={{ color: C.parch }} className="absolute right-5 top-5"><X size={28} /></button>
       <div style={{ color: C.gold }} className="text-sm font-bold uppercase tracking-widest">Foco · {i + 1} de {list.length}</div>
-      <div className="my-6 text-7xl" style={{ animation: "float 3s ease-in-out infinite" }}>{CATS[t.category].emoji}</div>
+      <div className="my-6 flex h-28 w-28 items-center justify-center rounded-3xl text-6xl"
+        style={{ background: taskColor(t) + "33", border: `4px solid ${taskColor(t)}`, animation: "float 3s ease-in-out infinite" }}>{taskIcon(t)}</div>
       <div style={{ color: C.parch }} className="font-serif text-3xl font-black leading-tight">{t.name}</div>
       <div style={{ color: C.parch2 }} className="mt-2">{t.desc}</div>
       <div style={{ color: C.gold }} className="mt-3 font-bold">Recompensa: +{t.xp} XP</div>
@@ -2205,6 +2389,18 @@ function Stats({ data, level, playerClass, sound, update, onSignOut, user }) {
           </span>
         </button>
         <p style={{ color: C.inkSoft }} className="mt-2 text-xs">Para quem quer mais adrenalina: missões não feitas custam XP (o mesmo que valiam). Sempre opcional.</p>
+      </Panel>
+
+      <Panel style={{ borderColor: C.gold }}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div style={{ color: C.ink }} className="flex items-center gap-2 font-serif font-bold">👾 Modo Game Boy</div>
+            <div style={{ color: C.inkSoft }} className="mt-0.5 text-xs">Deixa a tela principal (Missões) com visual retrô estilo Game Boy Color.</div>
+          </div>
+          <button onClick={() => update({ gbMode: !data.gbMode })}
+            style={{ background: data.gbMode ? C.xpDeep : "rgba(0,0,0,.1)", color: data.gbMode ? "#fff" : C.ink }}
+            className="flex-shrink-0 rounded-xl px-4 py-2 text-sm font-bold active:scale-95 transition">{data.gbMode ? "Ligado" : "Desligado"}</button>
+        </div>
       </Panel>
 
       <InstallSection />
