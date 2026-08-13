@@ -44,6 +44,7 @@ const CATS = {
   pet: { label: "Mona", emoji: "🐾", color: C.rose },
   casa: { label: "Casa", emoji: "🏠", color: C.sky },
   pessoal: { label: "Pessoal", emoji: "🎒", color: C.gold },
+  trabalho: { label: "Trabalho", emoji: "💼", color: "#8a6bd1" },
   saude: { label: "Saúde", emoji: "💙", color: "#34b3a0" },
 };
 
@@ -59,7 +60,7 @@ const DEFAULT_TASK_ICON = {
   torneiras: "🚰", filtro: "🥤", luzes: "💡", janela: "🪟", geladeira: "❄️", lixo: "🗑️",
   chave: "🔑", carteira: "👛", celular: "📱",
 };
-const CAT_FALLBACK_ICON = { pet: "🐾", casa: "🏠", pessoal: "🎒", saude: "💙" };
+const CAT_FALLBACK_ICON = { pet: "🐾", casa: "🏠", pessoal: "🎒", trabalho: "💼", saude: "💙" };
 function taskIcon(t) {
   return t?.icon || DEFAULT_TASK_ICON[t?.key] || CAT_FALLBACK_ICON[t?.category] || "⚔️";
 }
@@ -353,6 +354,7 @@ const FUN_MSGS = {
   pet: ["Seu bichinho está orgulhoso 🐾", "Carinho de aprovação ativado", "A casa agradece o cuidado"],
   casa: ["Você derrotou o Monstro da Pia Aberta", "Geladeira protegida com sucesso", "O Caos recuou um passo"],
   pessoal: ["Herói preparado para a jornada", "Mente e corpo em sincronia", "Mais um passo na disciplina"],
+  trabalho: ["Missão de trabalho concluída 💼", "Produtividade em alta, herói", "Mais uma pendência derrotada"],
   saude: ["Glicemia sob controle, herói 💙", "Seu corpo agradece o cuidado", "Mais um passo pela sua saúde"],
 };
 
@@ -400,7 +402,7 @@ const DEFAULT_DATA = {
   rewards: DEFAULT_REWARDS,
   purchases: [],
   tasksCompleted: 0,
-  catCounts: { pet: 0, casa: 0, pessoal: 0, saude: 0 },
+  catCounts: { pet: 0, casa: 0, pessoal: 0, trabalho: 0, saude: 0 },
   taskCounts: {},
   gems: 0,
   pet: { ...DEFAULT_PET },
@@ -998,6 +1000,7 @@ const CAT_MSG = {
   pet: ["Mona esta orgulhosa de voce!", "Voce cuidou bem da Mona!"],
   casa: ["Monstro da Pia Aberta derrotado!", "Casa protegida com sucesso!", "Geladeira selada!"],
   pessoal: ["Item essencial garantido!", "Heroi preparado pra aventura!"],
+  trabalho: ["Tarefa de trabalho concluida!", "Produtividade ativada!"],
   saude: ["Sua saude agradece!", "Buff de vida ativado!"],
 };
 function GBBox({ children, style, className = "" }) {
@@ -1113,7 +1116,7 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
   const [editMode, setEditMode] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const tasks = data.tasks || [];
-  const grouped = { pet: [], casa: [], pessoal: [] };
+  const grouped = { pet: [], casa: [], pessoal: [], trabalho: [] };
   visibleTasks.forEach((t) => { if (!grouped[t.category]) grouped[t.category] = []; grouped[t.category].push(t); });
   const doneCount = allTasks.filter((t) => data.doneToday.includes(t.id)).length;
 
@@ -1345,10 +1348,10 @@ function TaskForm({ initial, onCancel, onSave }) {
         </div>
       </div>
 
-      <div className="mb-2 flex gap-2">
+      <div className="mb-2 grid grid-cols-2 gap-2">
         {cats.map(([k, v]) => (
           <button key={k} onClick={() => setCat(k)} style={{ background: cat === k ? v.color : "rgba(0,0,0,.06)", color: cat === k ? "#fff" : C.ink }}
-            className="flex-1 rounded-xl py-2 text-sm font-bold">{v.emoji} {v.label}</button>
+            className="rounded-xl py-2 text-sm font-bold">{v.emoji} {v.label}</button>
         ))}
       </div>
       <div className="mb-2 flex items-center gap-2">
@@ -2592,11 +2595,11 @@ function stageFor(stages, xp) {
 }
 function getPlayerClass(counts, total, level) {
   if (total < 8) return "Aventureiro Novato";
-  const { pet = 0, casa = 0, pessoal = 0, saude = 0 } = counts;
-  const max = Math.max(pet, casa, pessoal, saude), min = Math.min(pet, casa, pessoal, saude);
+  const { pet = 0, casa = 0, pessoal = 0, trabalho = 0, saude = 0 } = counts;
+  const max = Math.max(pet, casa, pessoal, trabalho, saude), min = Math.min(pet, casa, pessoal, trabalho, saude);
   if (total >= 60 && max - min <= total * 0.3) return "Herói Lendário";
-  const top = [["casa", casa], ["pessoal", pessoal], ["pet", pet], ["saude", saude]].sort((a, b) => b[1] - a[1])[0][0];
-  return { casa: "Guardião da Casa", pessoal: "Monge da Disciplina", pet: "Guardião dos Bichos", saude: "Guardião da Saúde" }[top];
+  const top = [["casa", casa], ["pessoal", pessoal], ["pet", pet], ["trabalho", trabalho], ["saude", saude]].sort((a, b) => b[1] - a[1])[0][0];
+  return { casa: "Guardião da Casa", pessoal: "Monge da Disciplina", pet: "Guardião dos Bichos", trabalho: "Mestre do Trabalho", saude: "Guardião da Saúde" }[top];
 }
 function checkAchievements(d, level) {
   const snap = { tasksCompleted: d.tasksCompleted, level: levelFromXp(d.xpTotal).level, xpTotal: d.xpTotal, longestStreak: d.longestStreak, catCounts: d.catCounts, taskCounts: d.taskCounts, medDaysTotal: d.medDaysTotal };
