@@ -689,7 +689,7 @@ export default function RpgDaVida({ user, onSignOut }) {
   const allTasks = data.tasks || [];
   const { level, xpInLevel, xpForNext } = levelFromXp(data.xpTotal);
   const pct = Math.min(100, Math.round((xpInLevel / xpForNext) * 100));
-  const playerClass = getPlayerClass(data.catCounts, data.tasksCompleted, level);
+  const playerClass = getPlayerClass(data, level);
   const petStage = stageFor(PET_STAGES, data.xpTotal);
   const journeyStage = stageFor(JOURNEY, data.xpTotal);
   const petEnergy = currentEnergy(data);
@@ -742,13 +742,15 @@ export default function RpgDaVida({ user, onSignOut }) {
           bumpEnergy(d, ENERGY_RECOVER_TASK);
           d.hardPenaltyNote = null;
 
-          // Tamagotchi: cuidar da Mona real enche os medidores da Mona virtual
+          // Tamagotchi: cuidar do pet real enche os medidores do pet virtual.
+          // O vínculo com a categoria é por `sistema`, não por nome/id fixo.
+          const isPetTask = getCategory(d, task.category)?.sistema === "pet";
           settleTama(d);
           if (task.need) d.tama[task.need] = 100;
-          if (task.category === "pet") d.tama.fun = cl100(d.tama.fun + 12);
+          if (isPetTask) d.tama.fun = cl100(d.tama.fun + 12);
           if (d.tama.hunger > 20 && d.tama.thirst > 20 && d.tama.hygiene > 20) d.tama.sick = false;
           // vínculo (evolução por bom cuidado)
-          if (task.category === "pet") gainBond(d, 8);
+          if (isPetTask) gainBond(d, 8);
           if (task.need) gainBond(d, 6);
 
           // remédios do dia completos?
@@ -772,10 +774,10 @@ export default function RpgDaVida({ user, onSignOut }) {
             setTimeout(() => setLevelUpBanner(null), 2600);
           } else if (d.soundOn) sound.ding();
 
-          const color = (CATS[task.category] || CATS.pessoal).color;
+          const color = catView(d, task.category).cor;
           spawnPop(`+${task.xp} XP`, color);
           spawnParticles(color);
-          const arr = FUN_MSGS[task.category] || FUN_MSGS.pessoal;
+          const arr = FUN_MSGS[task.category] || FUN_MSGS.generic;
           showToast(arr[Math.floor(Math.random() * arr.length)]);
           if (newAch.unlocked.length) {
             const a = ACHIEVEMENTS.find((x) => x.id === newAch.unlocked[0]);
@@ -896,7 +898,8 @@ export default function RpgDaVida({ user, onSignOut }) {
             setLevelUpBanner(newLevel);
             setTimeout(() => setLevelUpBanner(null), 2600);
           } else if (d.soundOn) sound.ding();
-          spawnPop(`+${WATER_XP} XP`, CATS.saude.color); spawnParticles(CATS.saude.color);
+          const hColor = catView(d, systemCategoryId(d, "saude")).cor;
+          spawnPop(`+${WATER_XP} XP`, hColor); spawnParticles(hColor);
         }
       }
       return d;
@@ -904,7 +907,11 @@ export default function RpgDaVida({ user, onSignOut }) {
   };
 
   /* ---------- tarefas pendentes para Modo Foco / Rápida ---------- */
-  const todayTasks = allTasks.filter(isActiveToday);
+  // Missão de categoria desativada deixa de ser oferecida, mas continua visível
+  // no dia se já foi marcada — o histórico do usuário nunca some sem aviso.
+  const todayTasks = allTasks.filter(
+    (t) => isActiveToday(t) && (isCategoryOffered(data, t.category) || data.doneToday.includes(t.id))
+  );
   const visibleTasks = todayTasks.filter((t) => (quickOnly ? t.xp <= 5 : true));
   const pending = todayTasks.filter((t) => !data.doneToday.includes(t.id));
 
@@ -965,7 +972,7 @@ export default function RpgDaVida({ user, onSignOut }) {
 
       {/* MODO FOCO */}
       {focusMode && (
-        <FocusOverlay pending={pending} onClose={() => setFocusMode(false)} onDone={toggleTask} />
+        <FocusOverlay data={data} pending={pending} onClose={() => setFocusMode(false)} onDone={toggleTask} />
       )}
 
       {/* conteúdo */}
@@ -1084,6 +1091,7 @@ const CAT_MSG = {
   pessoal: ["Item essencial garantido!", "Heroi preparado pra aventura!"],
   trabalho: ["Tarefa de trabalho concluida!", "Produtividade ativada!"],
   saude: ["Sua saude agradece!", "Buff de vida ativado!"],
+  generic: ["Missao concluida!", "O Caos recuou um passo!", "Sua lenda cresceu!"],
 };
 function GBBox({ children, style, className = "" }) {
   return (
@@ -1099,7 +1107,7 @@ function GameBoyHome({ data, level, xpInLevel, xpForNext, pct, playerClass, tama
     const already = isDone(t.id);
     toggleTask(t);
     if (!already) {
-      const pool = CAT_MSG[t.category] || ["Missao concluida!"];
+      const pool = CAT_MSG[t.category] || CAT_MSG.generic;
       setDialog({ title: `+${t.xp} XP   +${t.xp} OURO`, body: pool[Math.floor(Math.random() * pool.length)] });
     }
   };
@@ -1112,7 +1120,7 @@ function GameBoyHome({ data, level, xpInLevel, xpForNext, pct, playerClass, tama
 
       <GBBox className="mb-3">
         <div style={{ fontSize: 13, lineHeight: 1.4 }}>{noac(data.playerName || "HEROI").toUpperCase()}</div>
-        <div style={{ fontSize: 8, color: GB.dim }} className="mt-1">{noac(playerClass?.name || "AVENTUREIRO").toUpperCase()}</div>
+        <div style={{ fontSize: 8, color: GB.dim }} className="mt-1">{noac(playerClass || "AVENTUREIRO").toUpperCase()}</div>
         <div className="mt-3 flex items-center gap-2" style={{ fontSize: 10 }}>
           <span>Lv{level}</span>
           <div style={{ flex: 1, height: 12, border: `2px solid ${GB.ink}`, background: GB.screen }}>
@@ -1198,8 +1206,20 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
   const [editMode, setEditMode] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const tasks = data.tasks || [];
-  const grouped = { pet: [], casa: [], pessoal: [], trabalho: [] };
-  visibleTasks.forEach((t) => { if (!grouped[t.category]) grouped[t.category] = []; grouped[t.category].push(t); });
+  // Agrupamento dinâmico: segue a ordem escolhida pelo usuário. Categorias
+  // desconhecidas caem num grupo de fallback em vez de quebrar a tela.
+  const byCat = new Map();
+  visibleTasks.forEach((t) => {
+    const k = t.category || "outros";
+    if (!byCat.has(k)) byCat.set(k, []);
+    byCat.get(k).push(t);
+  });
+  const known = sortedCategories(data).filter((c) => byCat.has(c.id));
+  const unknown = [...byCat.keys()].filter((k) => !getCategory(data, k));
+  const groups = [
+    ...known.map((c) => ({ cat: c, list: byCat.get(c.id) })),
+    ...unknown.map((k) => ({ cat: catView(data, k), list: byCat.get(k) })),
+  ];
   const doneCount = allTasks.filter((t) => data.doneToday.includes(t.id)).length;
 
   const saveTask = (task) => {
@@ -1304,28 +1324,29 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
       </div>
 
       {(adding || editingTask) && (
-        <TaskForm initial={editingTask} onCancel={() => { setAdding(false); setEditingTask(null); }} onSave={saveTask} />
+        <TaskForm data={data} initial={editingTask} onCancel={() => { setAdding(false); setEditingTask(null); }} onSave={saveTask} />
       )}
 
-      {Object.entries(grouped).map(([cat, list]) => list.length > 0 && (
-        <div key={cat} className="space-y-2">
+      {groups.map(({ cat, list }) => list.length > 0 && (
+        <div key={cat.id} className="space-y-2">
           <div className="flex items-center gap-2 px-1">
-            <span className="text-lg">{CATS[cat].emoji}</span>
-            <span style={{ color: C.parch }} className="font-serif font-bold">{CATS[cat].label}</span>
+            <span className="text-lg">{cat.emoji}</span>
+            <span style={{ color: C.parch }} className="font-serif font-bold">{cat.nome}</span>
+            {cat.ativa === false && <span style={{ color: C.parch2 }} className="text-[10px] font-bold">(inativa)</span>}
           </div>
           {list.map((t) => {
             const done = data.doneToday.includes(t.id);
             return (
               <div key={t.id} className="flex items-center gap-2">
                 <button onClick={() => (editMode ? setEditingTask(t) : toggleTask(t))}
-                  style={{ background: done ? "rgba(244,230,197,.45)" : C.parch, border: `3px solid ${done ? C.xpDeep : C.goldDeep}`, borderLeft: `7px solid ${taskColor(t)}`, boxShadow: done ? "none" : "0 4px 0 rgba(0,0,0,.2)" }}
+                  style={{ background: done ? "rgba(244,230,197,.45)" : C.parch, border: `3px solid ${done ? C.xpDeep : C.goldDeep}`, borderLeft: `7px solid ${taskColor(t, data)}`, boxShadow: done ? "none" : "0 4px 0 rgba(0,0,0,.2)" }}
                   className="flex flex-1 items-center gap-2.5 rounded-2xl p-3 text-left active:scale-[.98] transition">
                   <span style={{ background: done ? C.xp : "transparent", border: `2px solid ${done ? C.xpDeep : C.inkSoft}`, color: "#fff" }}
                     className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg">
                     {editMode ? <Pencil size={14} style={{ color: C.inkSoft }} /> : (done && <Check size={18} strokeWidth={3} />)}
                   </span>
-                  <span style={{ background: taskColor(t) + "2e", opacity: done && !editMode ? 0.5 : 1 }}
-                    className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-lg">{taskIcon(t)}</span>
+                  <span style={{ background: taskColor(t, data) + "2e", opacity: done && !editMode ? 0.5 : 1 }}
+                    className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-lg">{taskIcon(t, data)}</span>
                   <span className="min-w-0 flex-1">
                     <span style={{ color: C.ink, textDecoration: done && !editMode ? "line-through" : "none", opacity: done && !editMode ? 0.6 : 1 }}
                       className="block font-bold leading-tight">{t.name}</span>
@@ -1374,17 +1395,19 @@ function EditableName({ data, update }) {
   );
 }
 
-function TaskForm({ initial, onCancel, onSave }) {
+function TaskForm({ data, initial, onCancel, onSave }) {
+  // A aba Saúde tem lista própria (remédios e refeições), então a categoria de
+  // sistema 'saude' não é oferecida aqui — agora por `sistema`, não por id fixo.
+  const cats = activeCategories(data).filter((c) => c.sistema !== "saude");
   const [name, setName] = useState(initial?.name || "");
   const [desc, setDesc] = useState(initial?.desc || "");
   const [xp, setXp] = useState(initial?.xp || 10);
-  const [cat, setCat] = useState(initial?.category || "casa");
+  const [cat, setCat] = useState(initial?.category || cats[0]?.id || "casa");
   const [days, setDays] = useState(initial?.days || []);
-  const [icon, setIcon] = useState(initial ? taskIcon(initial) : "⚔️");
+  const [icon, setIcon] = useState(initial ? taskIcon(initial, data) : "⚔️");
   const [color, setColor] = useState(initial?.color || TASK_COLORS[2]);
   const WD = [["Dom", 0], ["Seg", 1], ["Ter", 2], ["Qua", 3], ["Qui", 4], ["Sex", 5], ["Sáb", 6]];
   const toggleDay = (n) => setDays((d) => (d.includes(n) ? d.filter((x) => x !== n) : [...d, n].sort((a, b) => a - b)));
-  const cats = Object.entries(CATS).filter(([k]) => k !== "saude");
   const submit = () => {
     if (!name.trim()) return;
     const t = { ...(initial || {}), id: initial?.id || "c_" + Math.random().toString(36).slice(2), name: name.trim(), desc: desc.trim(), xp, category: cat, icon, color };
@@ -1431,9 +1454,9 @@ function TaskForm({ initial, onCancel, onSave }) {
       </div>
 
       <div className="mb-2 grid grid-cols-2 gap-2">
-        {cats.map(([k, v]) => (
-          <button key={k} onClick={() => setCat(k)} style={{ background: cat === k ? v.color : "rgba(0,0,0,.06)", color: cat === k ? "#fff" : C.ink }}
-            className="rounded-xl py-2 text-sm font-bold">{v.emoji} {v.label}</button>
+        {cats.map((c) => (
+          <button key={c.id} onClick={() => setCat(c.id)} style={{ background: cat === c.id ? c.cor : "rgba(0,0,0,.06)", color: cat === c.id ? "#fff" : C.ink }}
+            className="truncate rounded-xl px-2 py-2 text-sm font-bold">{c.emoji} {c.nome}</button>
         ))}
       </div>
       <div className="mb-2 flex items-center gap-2">
@@ -1461,7 +1484,7 @@ function TaskForm({ initial, onCancel, onSave }) {
 }
 
 /* ---------- MODO FOCO ---------- */
-function FocusOverlay({ pending, onClose, onDone }) {
+function FocusOverlay({ data, pending, onClose, onDone }) {
   const [i, setI] = useState(0);
   const list = pending;
   const t = list[i];
@@ -1484,7 +1507,7 @@ function FocusOverlay({ pending, onClose, onDone }) {
       <button onClick={onClose} style={{ color: C.parch }} className="absolute right-5 top-5"><X size={28} /></button>
       <div style={{ color: C.gold }} className="text-sm font-bold uppercase tracking-widest">Foco · {i + 1} de {list.length}</div>
       <div className="my-6 flex h-28 w-28 items-center justify-center rounded-3xl text-6xl"
-        style={{ background: taskColor(t) + "33", border: `4px solid ${taskColor(t)}`, animation: "float 3s ease-in-out infinite" }}>{taskIcon(t)}</div>
+        style={{ background: taskColor(t, data) + "33", border: `4px solid ${taskColor(t, data)}`, animation: "float 3s ease-in-out infinite" }}>{taskIcon(t, data)}</div>
       <div style={{ color: C.parch }} className="font-serif text-3xl font-black leading-tight">{t.name}</div>
       <div style={{ color: C.parch2 }} className="mt-2">{t.desc}</div>
       <div style={{ color: C.gold }} className="mt-3 font-bold">Recompensa: +{t.xp} XP</div>
@@ -1809,10 +1832,13 @@ function Pet({ data, tama, tamaCare, pickStarter, update }) {
   const ageDays = Math.max(0, Math.floor((Date.now() - new Date(t.startedAt || Date.now()).getTime()) / 86400000));
   const evoPct = t.stage < MON_MAX_STAGE ? Math.min(100, Math.round((t.bond / MON_EVO[t.stage]) * 100)) : 100;
 
+  // Os lembretes citam o nome que o usuário deu à categoria de cuidado —
+  // nunca um nome fixo.
+  const careName = catView(data, systemCategoryId(data, "pet")).nome;
   const METERS = [
-    { key: "hunger", label: "Fome", emoji: "🍖", color: "#e8843a", nudge: "Hora de pôr comida pra Mona de verdade 🍖" },
-    { key: "thirst", label: "Água", emoji: "💧", color: "#3a8fd8", nudge: "Troca a aguinha da Mona 💧" },
-    { key: "hygiene", label: "Higiene", emoji: "🧹", color: "#2a8c4a", nudge: "A caixa de areia pede limpeza 🧹" },
+    { key: "hunger", label: "Fome", emoji: "🍖", color: "#e8843a", nudge: `Hora de pôr comida de verdade — ${careName} 🍖` },
+    { key: "thirst", label: "Água", emoji: "💧", color: "#3a8fd8", nudge: `Troque a aguinha — ${careName} 💧` },
+    { key: "hygiene", label: "Higiene", emoji: "🧹", color: "#2a8c4a", nudge: `O espaço pede uma limpeza — ${careName} 🧹` },
     { key: "fun", label: "Felicidade", emoji: "🧶", color: C.rose, nudge: "Ele quer brincar — dá uma atenção 🧶" },
   ];
   const lows = METERS.filter((m) => t[m.key] < 35).sort((a, b) => t[a.key] - t[b.key]);
@@ -1903,7 +1929,7 @@ function Pet({ data, tama, tamaCare, pickStarter, update }) {
       {(lows.length > 0 || t.sick) && (
         <Panel style={{ background: "#fff7e6", borderColor: C.ember }}>
           <div style={{ color: C.ink }} className="text-sm">
-            <b>{pet.name} te chama 🐾</b> — cuidar dele aqui lembra de cuidar da Mona de verdade:
+            <b>{pet.name} te chama 🐾</b> — cuidar dele aqui lembra de cuidar de {careName} na vida real:
             <ul className="mt-1 list-disc pl-5">
               {t.sick && <li>Ele não está bem. Remédio e cuidado ajudam a recuperar. 💛</li>}
               {lows.slice(0, 3).map((m) => <li key={m.key}>{m.nudge}</li>)}
@@ -1944,7 +1970,7 @@ function Pet({ data, tama, tamaCare, pickStarter, update }) {
           </div>
         )}
         <p style={{ color: C.inkSoft }} className="mt-3 text-xs">
-          As missões de <b>comida, água, areia e brincar</b> (com a Mona real) enchem os medidores e fortalecem o <b>vínculo</b>, que faz o {pet.name} evoluir. Ele fica triste/doente, mas <b>nunca</b> morre. 💛
+          As missões de <b>cuidado</b> (comida, água, higiene e diversão) enchem os medidores e fortalecem o <b>vínculo</b>, que faz o {pet.name} evoluir. Ele fica triste/doente, mas <b>nunca</b> morre. 💛
         </p>
       </Panel>
     </div>
@@ -2275,8 +2301,9 @@ function Saude({ data, addWater, toggleTask, update, medDone }) {
   if (meals.length) fracs.push(mealsDone / meals.length);
   const vit = Math.round((fracs.reduce((a, b) => a + b, 0) / fracs.length) * 100);
 
+  const healthCat = systemCategoryId(data, "saude");
   const addMed = (period, m) => {
-    update({ meds: [...meds, { id: "m_" + Math.random().toString(36).slice(2), name: m.name, desc: m.dose, xp: m.xp, category: "saude", period, med: true }] });
+    update({ meds: [...meds, { id: "m_" + Math.random().toString(36).slice(2), name: m.name, desc: m.dose, xp: m.xp, category: healthCat, period, med: true }] });
     setAddP(null);
   };
   const removeMed = (id) => update({ meds: meds.filter((m) => m.id !== id), doneToday: data.doneToday.filter((x) => x !== id) });
@@ -2332,7 +2359,7 @@ function Saude({ data, addWater, toggleTask, update, medDone }) {
       {/* refeições nomeadas */}
       <div style={{ color: C.parch }} className="flex items-center gap-2 px-1 font-serif text-lg font-bold"><Utensils size={20} /> Refeições</div>
       {meals.map((m) => (
-        <HealthRow key={m.id} t={m} icon={Utensils} done={data.doneToday.includes(m.id)} onToggle={() => toggleTask({ ...m, category: "saude" })} onDelete={editHealth ? () => removeMeal(m.id) : undefined} />
+        <HealthRow key={m.id} t={m} icon={Utensils} done={data.doneToday.includes(m.id)} onToggle={() => toggleTask({ ...m, category: healthCat })} onDelete={editHealth ? () => removeMeal(m.id) : undefined} />
       ))}
       {addingMeal ? <MealForm onCancel={() => setAddingMeal(false)} onAdd={addMeal} /> : (
         <button onClick={() => setAddingMeal(true)} style={{ borderColor: "#e08a3c", color: C.parch }}
@@ -2400,8 +2427,9 @@ function BossList({ data }) {
 
 /* ---------- STATS + CONQUISTAS + AJUSTES ---------- */
 function Stats({ data, level, playerClass, sound, update, onSignOut, user }) {
-  const fav = Object.entries(data.catCounts).sort((a, b) => b[1] - a[1])[0];
-  const favLabel = fav && fav[1] > 0 ? `${CATS[fav[0]].emoji} ${CATS[fav[0]].label}` : "—";
+  const fav = Object.entries(data.catCounts || {}).sort((a, b) => b[1] - a[1])[0];
+  const favCat = fav ? catView(data, fav[0]) : null;
+  const favLabel = fav && fav[1] > 0 ? `${favCat.emoji} ${favCat.nome}` : "—";
   const hours = ((data.tasksCompleted * 3) / 60).toFixed(1);
   const unlocked = data.achievements || [];
   const cells = [
@@ -2675,13 +2703,20 @@ function stageFor(stages, xp) {
   for (const st of stages) if (xp >= st.xp) s = st;
   return s;
 }
-function getPlayerClass(counts, total, level) {
+/** Classe genérica, calculada sobre as categorias do próprio usuário.
+ *  (Classes por atributo entram na Fase 4.) */
+function getPlayerClass(data, level) {
+  const counts = data?.catCounts || {};
+  const total = data?.tasksCompleted || 0;
   if (total < 8) return "Aventureiro Novato";
-  const { pet = 0, casa = 0, pessoal = 0, trabalho = 0, saude = 0 } = counts;
-  const max = Math.max(pet, casa, pessoal, trabalho, saude), min = Math.min(pet, casa, pessoal, trabalho, saude);
+  const entries = categoriesOf(data).map((c) => [c.id, counts[c.id] || 0]);
+  if (!entries.length) return "Aventureiro";
+  const values = entries.map((e) => e[1]);
+  const max = Math.max(...values), min = Math.min(...values);
   if (total >= 60 && max - min <= total * 0.3) return "Herói Lendário";
-  const top = [["casa", casa], ["pessoal", pessoal], ["pet", pet], ["trabalho", trabalho], ["saude", saude]].sort((a, b) => b[1] - a[1])[0][0];
-  return { casa: "Guardião da Casa", pessoal: "Monge da Disciplina", pet: "Guardião dos Bichos", trabalho: "Mestre do Trabalho", saude: "Guardião da Saúde" }[top];
+  const top = [...entries].sort((a, b) => b[1] - a[1])[0];
+  if (!top || top[1] <= 0) return "Aventureiro";
+  return `Guardião de ${catView(data, top[0]).nome}`;
 }
 function checkAchievements(d, level) {
   const snap = { tasksCompleted: d.tasksCompleted, level: levelFromXp(d.xpTotal).level, xpTotal: d.xpTotal, longestStreak: d.longestStreak, catCounts: d.catCounts, taskCounts: d.taskCounts, medDaysTotal: d.medDaysTotal };
