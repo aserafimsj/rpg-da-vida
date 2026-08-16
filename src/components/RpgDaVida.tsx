@@ -569,7 +569,7 @@ export default function RpgDaVida({ user, onSignOut }) {
           d.tasks = d.tasks.map((t) => (needByKey[t.key] && !t.need ? { ...t, need: needByKey[t.key] } : t));
           if (!d.tasks.some((t) => t.key === "brincar_mona")) {
             const idx = d.tasks.findIndex((t) => t.key === "areia");
-            const brincar = { id: "t_brincar", key: "brincar_mona", name: "Brincar com a Mona", desc: "Um tempinho de carinho e brincadeira", xp: 10, category: "pet", need: "fun" };
+            const brincar = { id: "t_brincar", key: "brincar_mona", name: "Brincar com o pet", desc: "Um tempinho de carinho e brincadeira", xp: 10, category: "pet", need: "fun" };
             if (idx >= 0) d.tasks.splice(idx + 1, 0, brincar); else d.tasks.push(brincar);
           }
         }
@@ -1045,7 +1045,7 @@ const GB = {
 };
 const noac = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 const CAT_MSG = {
-  pet: ["Mona esta orgulhosa de voce!", "Voce cuidou bem da Mona!"],
+  pet: ["Seu bichinho esta orgulhoso!", "Voce cuidou bem do seu pet!"],
   casa: ["Monstro da Pia Aberta derrotado!", "Casa protegida com sucesso!", "Geladeira selada!"],
   pessoal: ["Item essencial garantido!", "Heroi preparado pra aventura!"],
   trabalho: ["Tarefa de trabalho concluida!", "Produtividade ativada!"],
@@ -1946,7 +1946,7 @@ function Pet({ data, tama, tamaCare, pickStarter, update }) {
         </div>
       </Panel>
 
-      {/* lembrete de cuidar da Mona REAL */}
+      {/* lembrete de cuidar do pet REAL */}
       {(lows.length > 0 || t.sick) && (
         <Panel style={{ background: "#fff7e6", borderColor: C.ember }}>
           <div style={{ color: C.ink }} className="text-sm">
