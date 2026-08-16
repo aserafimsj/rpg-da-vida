@@ -124,6 +124,64 @@ function taskColor(t, data) {
   return t?.color || catView(data, t?.category).cor || C.gold;
 }
 
+/* ---------- Dificuldade (declarada, nunca inferida do XP) ---------- */
+const DIFICULDADES = [
+  { id: "rapida", label: "Rápida", emoji: "⚡", hint: "~2 min", xpSug: [3, 5], selo: "⚡ rápida" },
+  { id: "normal", label: "Normal", emoji: "⚔️", hint: "do dia a dia", xpSug: [10, 15], selo: null },
+  { id: "epica", label: "Épica", emoji: "🔥", hint: "exige fôlego", xpSug: [20, 30], selo: "🔥 épica" },
+];
+const dificuldadeOf = (t) => (DIFICULDADES.some((d) => d.id === t?.dificuldade) ? t.dificuldade : "normal");
+const dificuldadeInfo = (t) => DIFICULDADES.find((d) => d.id === dificuldadeOf(t)) || DIFICULDADES[1];
+/** Regra de migração: preserva exatamente o comportamento do save atual,
+ *  onde "rápida" era qualquer missão de até 5 XP. */
+const dificuldadeFromXp = (xp) => ((xp || 0) <= 5 ? "rapida" : "normal");
+
+/* ---------- Recorrência ----------
+   { tipo: 'sempre' }
+   { tipo: 'dias_semana', dias: number[] }
+   { tipo: 'a_cada_n_dias', n, ancora: 'YYYY-MM-DD' }
+   { tipo: 'unica', data: 'YYYY-MM-DD' }                                   */
+const RECORRENCIA_TIPOS = [
+  { id: "sempre", label: "Todo dia", emoji: "🔁" },
+  { id: "dias_semana", label: "Dias da semana", emoji: "📅" },
+  { id: "a_cada_n_dias", label: "A cada N dias", emoji: "⏳" },
+  { id: "unica", label: "Só uma vez", emoji: "🎯" },
+];
+/** Lê a recorrência da missão, derivando do `days` legado quando preciso. */
+function recorrenciaOf(t) {
+  const r = t?.recorrencia;
+  if (r && typeof r === "object" && r.tipo) return r;
+  const dias = t?.days;
+  if (Array.isArray(dias) && dias.length && dias.length < 7) return { tipo: "dias_semana", dias };
+  return { tipo: "sempre" };
+}
+function recorrenciaLabel(t) {
+  const r = recorrenciaOf(t);
+  if (r.tipo === "a_cada_n_dias") return `a cada ${r.n} dia${r.n > 1 ? "s" : ""}`;
+  if (r.tipo === "unica") return `só em ${(r.data || "").split("-").reverse().slice(0, 2).join("/")}`;
+  if (r.tipo === "dias_semana") {
+    const N = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+    return (r.dias || []).map((d) => N[d]).join(", ");
+  }
+  return "todo dia";
+}
+
+/** Garante `dificuldade` e `recorrencia` na missão, sem alterar comportamento. */
+function normalizeTask(t) {
+  const out = { ...t };
+  if (!DIFICULDADES.some((x) => x.id === out.dificuldade)) out.dificuldade = dificuldadeFromXp(out.xp);
+  if (!out.recorrencia || !out.recorrencia.tipo) out.recorrencia = recorrenciaOf(t);
+  return out;
+}
+
+/* ---------- Pular sem culpa: o Mestre nunca cobra ---------- */
+const SKIP_MSGS = [
+  "Até heróis recuam para atacar melhor amanhã.",
+  "Missão adiada não é missão perdida.",
+  "O mapa continua aí. Volte quando quiser.",
+  "Descansar também faz parte da jornada. 💛",
+];
+
 /* ---------- Tarefas iniciais (só para usuários novos) ----------
    Textos genéricos de propósito: as missões de um save existente são dado
    do usuário e nunca são reescritas por aqui. As `key` são preservadas
@@ -394,7 +452,37 @@ const dayKey = (d = new Date()) => {
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
 };
 const yesterdayKey = () => { const d = new Date(); d.setDate(d.getDate() - 1); return dayKey(d); };
-const isActiveToday = (t) => !t.days || t.days.includes(new Date().getDay());
+/** Meio-dia local, para diferenças de dias imunes a horário de verão. */
+const noonOf = (key) => new Date(`${key}T12:00:00`);
+const daysBetween = (aKey, bKey) => Math.round((noonOf(bKey) - noonOf(aKey)) / 86400000);
+
+/** A missão vale para este dia? Entende os 4 tipos de recorrência.
+ *  `ref` é a data de referência (default: hoje) — usada também no reset diário
+ *  para avaliar o dia que está fechando. */
+function isActiveOn(t, refKey = dayKey()) {
+  const r = recorrenciaOf(t);
+  if (r.tipo === "sempre") return true;
+  if (r.tipo === "dias_semana") {
+    const dias = Array.isArray(r.dias) ? r.dias : [];
+    return dias.length ? dias.includes(noonOf(refKey).getDay()) : true;
+  }
+  if (r.tipo === "unica") return r.data === refKey;
+  if (r.tipo === "a_cada_n_dias") {
+    const n = Math.max(1, Number(r.n) || 1);
+    const ancora = r.ancora || refKey;
+    const diff = daysBetween(ancora, refKey);
+    return diff >= 0 && diff % n === 0;
+  }
+  return true;
+}
+const isActiveToday = (t) => isActiveOn(t);
+/** Missão única já concluída alguma vez não volta; a de data passada some sem punir. */
+function isRetired(t, data) {
+  const r = recorrenciaOf(t);
+  if (r.tipo !== "unica") return false;
+  if ((data?.completedOnce || []).includes(t.id)) return true;
+  return !!r.data && daysBetween(r.data, dayKey()) > 0;
+}
 function markActive(d) {
   const today = dayKey();
   if (!d.daysActive.includes(today)) d.daysActive = [...d.daysActive, today];
@@ -417,6 +505,9 @@ const DEFAULT_DATA = {
   gold: 0,
   doneToday: [],
   scoredToday: { date: dayKey(), ids: [] }, // anti-farm: o que já pontuou hoje
+  skippedToday: { date: dayKey(), ids: [] }, // puladas hoje (sem culpa, sem punição)
+  skipsTotal: 0,        // contador interno; de propósito não vira tela
+  completedOnce: [],    // ids de missões únicas já concluídas (não voltam)
   lastResetDate: dayKey(),
   tasks: null,      // semeado em freshData()/migração
   categories: null, // semeado em freshData()/migração
@@ -463,6 +554,8 @@ function freshData() {
   return {
     ...DEFAULT_DATA,
     scoredToday: { date: dayKey(), ids: [] },
+    skippedToday: { date: dayKey(), ids: [] },
+    completedOnce: [],
     water: { date: dayKey(), count: 0 },
     waterScored: { date: dayKey(), cups: 0 },
     tasks: BASE_TASKS.map((t) => ({ ...t })),
@@ -587,14 +680,27 @@ export default function RpgDaVida({ user, onSignOut }) {
         ativa: c.sistema ? true : c.ativa !== false,
       }));
 
+      // ---- Fase 2: dificuldade e recorrência viram campos explícitos ----
+      // A regra de migração reproduz o comportamento que o save já tinha:
+      // "rápida" era toda missão de até 5 XP, e `days` virava dias da semana.
+      // `t.days` é preservado por retrocompatibilidade; as leituras usam
+      // `recorrencia`.
+      if (Array.isArray(d.tasks)) d.tasks = d.tasks.map(normalizeTask);
+      if (Array.isArray(d.meds)) d.meds = d.meds.map((m) => ({ ...m, dificuldade: m.dificuldade || "rapida" }));
+      if (Array.isArray(d.meals)) d.meals = d.meals.map((m) => ({ ...m, dificuldade: m.dificuldade || "rapida" }));
+      if (!d.skippedToday || d.skippedToday.date !== dayKey()) d.skippedToday = { date: dayKey(), ids: [] };
+      if (typeof d.skipsTotal !== "number") d.skipsTotal = 0;
+      if (!Array.isArray(d.completedOnce)) d.completedOnce = [];
+
       // reset diário
       const today = dayKey();
       if (d.lastResetDate !== today) {
-        // Modo Difícil: penaliza missões não feitas no dia que está fechando
+        // Modo Difícil: penaliza missões não feitas no dia que está fechando.
+        // Quem pulou conscientemente NUNCA é punido por isso.
         if (d.hardMode && d.lastResetDate) {
-          const prevDow = new Date(`${d.lastResetDate}T12:00:00`).getDay();
-          const prevActive = (d.tasks || []).filter((t) => !t.days || t.days.includes(prevDow));
-          const missed = prevActive.filter((t) => !d.doneToday.includes(t.id));
+          const skippedIds = (d.skippedToday && d.skippedToday.date === d.lastResetDate) ? d.skippedToday.ids : [];
+          const prevActive = (d.tasks || []).filter((t) => isActiveOn(t, d.lastResetDate));
+          const missed = prevActive.filter((t) => !d.doneToday.includes(t.id) && !skippedIds.includes(t.id));
           const penalty = missed.reduce((s, t) => s + (t.xp || 0), 0);
           if (penalty > 0) {
             d.xpTotal = Math.max(0, d.xpTotal - penalty);
@@ -607,6 +713,7 @@ export default function RpgDaVida({ user, onSignOut }) {
         d.water = { date: today, count: 0 };
         d.waterScored = { date: today, cups: 0 };
         d.scoredToday = { date: today, ids: [] };
+        d.skippedToday = { date: today, ids: [] };
         // chama da medicação: quebra se pulou um dia
         if (d.lastMedDate && d.lastMedDate !== today && d.lastMedDate !== yesterdayKey()) d.medStreak = 0;
         // streak: marca quebra amigável se o último dia ativo não foi ontem nem hoje
@@ -690,6 +797,10 @@ export default function RpgDaVida({ user, onSignOut }) {
           d.gold += task.xp;
           d.scoredToday = { date: today, ids: [...scored, task.id] };
           d.tasksCompleted += 1;
+          // missão "só uma vez" concluída não volta mais
+          if (recorrenciaOf(task).tipo === "unica" && !(d.completedOnce || []).includes(task.id)) {
+            d.completedOnce = [...(d.completedOnce || []), task.id];
+          }
           d.catCounts = { ...d.catCounts, [task.category]: (d.catCounts[task.category] || 0) + 1 };
           if (task.key) d.taskCounts = { ...d.taskCounts, [task.key]: (d.taskCounts[task.key] || 0) + 1 };
 
@@ -750,7 +861,11 @@ export default function RpgDaVida({ user, onSignOut }) {
           }
 
           // bônus por fechar todas as missões do dia (1x/dia)
-          const todays = (d.tasks || []).filter(isActiveToday);
+          // o "dia completo" ignora puladas e missões já aposentadas
+          const skippedNow = (d.skippedToday && d.skippedToday.date === today) ? d.skippedToday.ids : [];
+          const todays = (d.tasks || []).filter(
+            (x) => isActiveToday(x) && !isRetired(x, d) && !skippedNow.includes(x.id)
+          );
           if (todays.length && todays.every((t) => d.doneToday.includes(t.id)) && d.dayBonusDate !== today) {
             d.gems = (d.gems || 0) + GEMS_DAY_BONUS;
             d.dayBonusDate = today;
@@ -805,6 +920,29 @@ export default function RpgDaVida({ user, onSignOut }) {
     });
     if (award > 0 && data.soundOn) sound.coin();
     return award;
+  };
+
+  /* ---------- pular / despular (sem culpa, sem punição) ----------
+     Pular tira a missão do dia, não dá XP, não conta para a streak e não
+     entra na penalidade do Modo Difícil. Ela volta na próxima ocorrência. */
+  const toggleSkip = (task) => {
+    const today = dayKey();
+    const cur = (data.skippedToday && data.skippedToday.date === today) ? data.skippedToday.ids : [];
+    const isSkipped = cur.includes(task.id);
+    setData((prev) => {
+      const d = { ...prev };
+      const list = (d.skippedToday && d.skippedToday.date === today) ? d.skippedToday.ids : [];
+      if (isSkipped) {
+        d.skippedToday = { date: today, ids: list.filter((id) => id !== task.id) };
+      } else {
+        d.skippedToday = { date: today, ids: [...list, task.id] };
+        d.skipsTotal = (d.skipsTotal || 0) + 1;
+        // desmarcar se estava concluída não devolve XP (mesma regra do desfazer)
+        d.doneToday = d.doneToday.filter((id) => id !== task.id);
+      }
+      return d;
+    });
+    if (!isSkipped) showToast(SKIP_MSGS[Math.floor(Math.random() * SKIP_MSGS.length)]);
   };
 
   // interações livres do Tamagotchi (não dão XP/ouro; só cuidam do bichinho)
@@ -864,10 +1002,15 @@ export default function RpgDaVida({ user, onSignOut }) {
   /* ---------- tarefas pendentes para Modo Foco / Rápida ---------- */
   // Missão de categoria desativada deixa de ser oferecida, mas continua visível
   // no dia se já foi marcada — o histórico do usuário nunca some sem aviso.
-  const todayTasks = allTasks.filter(
-    (t) => isActiveToday(t) && (isCategoryOffered(data, t.category) || data.doneToday.includes(t.id))
+  const skippedIds = (data.skippedToday && data.skippedToday.date === dayKey()) ? data.skippedToday.ids : [];
+  const dayTasks = allTasks.filter(
+    (t) => isActiveToday(t) && !isRetired(t, data)
+      && (isCategoryOffered(data, t.category) || data.doneToday.includes(t.id))
   );
-  const visibleTasks = todayTasks.filter((t) => (quickOnly ? t.xp <= 5 : true));
+  // as puladas saem do dia, mas continuam acessíveis num grupo próprio
+  const todayTasks = dayTasks.filter((t) => !skippedIds.includes(t.id));
+  const skippedTasks = dayTasks.filter((t) => skippedIds.includes(t.id));
+  const visibleTasks = todayTasks.filter((t) => (quickOnly ? dificuldadeOf(t) === "rapida" : true));
   const pending = todayTasks.filter((t) => !data.doneToday.includes(t.id));
 
   /* ============================================================ */
@@ -927,7 +1070,7 @@ export default function RpgDaVida({ user, onSignOut }) {
 
       {/* MODO FOCO */}
       {focusMode && (
-        <FocusOverlay data={data} pending={pending} onClose={() => setFocusMode(false)} onDone={toggleTask} />
+        <FocusOverlay data={data} pending={pending} onClose={() => setFocusMode(false)} onDone={toggleTask} onSkip={toggleSkip} />
       )}
 
       {/* conteúdo */}
@@ -940,8 +1083,8 @@ export default function RpgDaVida({ user, onSignOut }) {
                 playerClass={playerClass} tama={tama} tasks={todayTasks} toggleTask={toggleTask}
                 exit={() => update({ gbMode: false })} />
             : <Aventura {...{ data, level, xpInLevel, xpForNext, pct, playerClass, petStage, journeyStage,
-                visibleTasks, quickOnly, setQuickOnly, toggleTask, setFocusMode, pending, allTasks: todayTasks, update,
-                openGame: () => setShowGame(true) }} />
+                visibleTasks, skippedTasks, quickOnly, setQuickOnly, toggleTask, toggleSkip, setFocusMode,
+                pending, allTasks: todayTasks, update, openGame: () => setShowGame(true) }} />
         )}
         {tab === "loja" && <Loja data={data} buyReward={buyReward} buyCosmetic={buyCosmetic} update={update} />}
         {tab === "pet" && <Pet data={data} tama={tama} tamaCare={tamaCare} pickStarter={pickStarter} update={update} />}
@@ -1160,11 +1303,13 @@ function InstallHint() {
 }
 
 function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStage, journeyStage,
-  visibleTasks, quickOnly, setQuickOnly, toggleTask, setFocusMode, pending, allTasks, update, openGame }) {
+  visibleTasks, skippedTasks = [], quickOnly, setQuickOnly, toggleTask, toggleSkip, setFocusMode,
+  pending, allTasks, update, openGame }) {
   const [adding, setAdding] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [showCats, setShowCats] = useState(false);
+  const [showSkipped, setShowSkipped] = useState(false);
   const tasks = data.tasks || [];
   // Agrupamento dinâmico: segue a ordem escolhida pelo usuário. Categorias
   // desconhecidas caem num grupo de fallback em vez de quebrar a tela.
@@ -1322,17 +1467,47 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
                   </span>
                   <span className="flex flex-shrink-0 flex-col items-end gap-1">
                     <Tag color={C.xpDeep}>+{t.xp} XP</Tag>
-                    {t.xp <= 5 && <span style={{ color: C.inkSoft }} className="text-[9px] font-bold">⚡ rápida</span>}
+                    {dificuldadeInfo(t).selo && (
+                      <span style={{ color: C.inkSoft }} className="text-[9px] font-bold">{dificuldadeInfo(t).selo}</span>
+                    )}
                   </span>
                 </button>
-                {editMode && (
+                {editMode ? (
                   <button onClick={() => removeTask(t.id)} style={{ color: C.ember }} className="p-1 active:scale-90 transition"><Trash2 size={16} /></button>
+                ) : (
+                  // ação secundária, discreta de propósito: nunca compete com o check
+                  <button onClick={() => toggleSkip(t)} title="Pular hoje, sem culpa" aria-label={`Pular ${t.name} hoje`}
+                    style={{ color: C.parch2 }} className="p-1 text-sm opacity-70 active:scale-90 transition">↷</button>
                 )}
               </div>
             );
           })}
         </div>
       ))}
+
+      {/* puladas hoje — recolhido, sem tom de cobrança */}
+      {skippedTasks.length > 0 && (
+        <div className="space-y-2">
+          <button onClick={() => setShowSkipped((s) => !s)}
+            style={{ color: C.parch2 }} className="flex w-full items-center gap-2 px-1 text-xs font-bold">
+            <span>{showSkipped ? "▾" : "▸"}</span>
+            <span>Puladas hoje ({skippedTasks.length})</span>
+            <span style={{ color: C.inkSoft }} className="font-normal">— voltam na próxima vez</span>
+          </button>
+          {showSkipped && skippedTasks.map((t) => (
+            <div key={t.id} className="flex items-center gap-2">
+              <div style={{ background: "rgba(244,230,197,.25)", border: `2px dashed ${C.goldDeep}` }}
+                className="flex flex-1 items-center gap-2.5 rounded-2xl p-2.5">
+                <span style={{ background: taskColor(t, data) + "22" }}
+                  className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl text-base opacity-60">{taskIcon(t, data)}</span>
+                <span style={{ color: C.parch }} className="min-w-0 flex-1 truncate text-sm font-bold">{t.name}</span>
+              </div>
+              <button onClick={() => toggleSkip(t)} style={{ background: C.gold, color: C.ink }}
+                className="flex-shrink-0 rounded-lg px-2.5 py-1.5 text-[11px] font-bold active:scale-95 transition">Despular</button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* adicionar tarefa */}
       {!adding && !editingTask && (
