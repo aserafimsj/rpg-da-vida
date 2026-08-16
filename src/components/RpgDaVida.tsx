@@ -6,7 +6,12 @@ import { getSupabase } from "@/lib/supabaseClient";
 import { getDeferred, subscribe as subscribeInstall, doInstall, isStandalone, isIOS } from "@/lib/pwa";
 import { pushSupported, currentSubscription, enablePush, disablePush, sendTestLocal } from "@/lib/push";
 import RoutineDefense from "./RoutineDefense";
-import { loadSave, persistSave } from "@/lib/save";
+import { loadSaveComVersao, persistSave } from "@/lib/save";
+import {
+  lendoDasTabelas, listarCategorias, listarMissoes, backfill,
+  salvarCategorias, salvarMissoes, apagarCategorias, apagarMissoes,
+  registrarConclusao, limparTudoDoUsuario, contarTudo, idsNoBanco,
+} from "@/lib/gamedb";
 import {
   Sword, Store, Heart, BarChart3, Crown, Flame, Map,
   Plus, Minus, Trash2, X, Target, Zap, Volume2, VolumeX, Coins, Check,
@@ -619,6 +624,7 @@ export default function RpgDaVida({ user, onSignOut }) {
   const [toast, setToast] = useState(null);
   const sound = useSound();
   const saveTimer = useRef(null);
+  const versaoSave = useRef(null);   // updated_at conhecido, p/ detectar concorrência
 
   /* ----- carregar ----- */
   useEffect(() => {
@@ -626,7 +632,9 @@ export default function RpgDaVida({ user, onSignOut }) {
     (async () => {
       let loaded = null;
       try {
-        loaded = await loadSave(supabase, userId);
+        const r = await loadSaveComVersao(supabase, userId);
+        loaded = r.data;
+        versaoSave.current = r.updatedAt;
       } catch (e) { /* primeira vez ou erro de rede */ }
       let d = { ...freshData(), ...(loaded || {}) };
 
@@ -722,7 +730,34 @@ export default function RpgDaVida({ user, onSignOut }) {
           d.streakBrokenNote = true;
         }
       }
+
+      /* ---- Fase 3: leitura pelas tabelas (só com a flag ligada) ----
+         Se qualquer coisa falhar, fica com o JSON. Em nenhum momento o
+         jogo depende do banco para abrir. */
+      if (lendoDasTabelas()) {
+        try {
+          const [cats, missoes] = await Promise.all([
+            listarCategorias(supabase, userId),
+            listarMissoes(supabase, userId),
+          ]);
+          if (cats.length) d.categories = cats;
+          if (missoes.length) d.tasks = missoes.map(normalizeTask);
+        } catch (e) { /* silencioso: o JSON já está carregado */ }
+      }
+
       if (alive) setData(d);
+
+      /* ---- Fase 3: backfill automático, em segundo plano ----
+         Popula as tabelas a partir do save, para este e para qualquer
+         usuário futuro. Idempotente: repetir não duplica nada. */
+      (async () => {
+        try {
+          const feito = await backfill(supabase, userId, d.categories || [], d.tasks || []);
+          if (feito && alive && !d.backfillFase3Em) {
+            setData((prev) => (prev ? { ...prev, backfillFase3Em: new Date().toISOString() } : prev));
+          }
+        } catch (e) { /* tenta de novo no próximo load */ }
+      })();
     })();
     return () => { alive = false; };
   }, [userId]);
@@ -733,7 +768,8 @@ export default function RpgDaVida({ user, onSignOut }) {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       try {
-        await persistSave(supabase, userId, data);
+        const r = await persistSave(supabase, userId, data, versaoSave.current);
+        versaoSave.current = r.updatedAt;
       } catch (e) { /* tenta de novo no próximo save */ }
     }, 500);
   }, [data, userId]);
@@ -797,6 +833,10 @@ export default function RpgDaVida({ user, onSignOut }) {
           d.gold += task.xp;
           d.scoredToday = { date: today, ids: [...scored, task.id] };
           d.tasksCompleted += 1;
+          // espelho no banco: histórico de conclusões (1x/dia garantido pela PK)
+          registrarConclusao(supabase, userId, {
+            missaoId: task.id, data: today, xp: task.xp || 0, ouro: task.xp || 0,
+          });
           // missão "só uma vez" concluída não volta mais
           if (recorrenciaOf(task).tipo === "unica" && !(d.completedOnce || []).includes(task.id)) {
             d.completedOnce = [...(d.completedOnce || []), task.id];
@@ -893,7 +933,40 @@ export default function RpgDaVida({ user, onSignOut }) {
     showToast(`${rw.emoji} ${rw.name} resgatado!`);
   };
 
-  const update = (patch) => setData((prev) => ({ ...prev, ...patch }));
+  /* ---------- escrita dupla (Fase 3) ----------
+     `update` é o funil de toda mutação de categoria e missão — criar,
+     editar, renomear, reordenar, ativar/desativar, remover. Espelhar aqui
+     cobre todas elas num lugar só. O JSON continua sendo gravado do mesmo
+     jeito; o banco é espelho e nunca bloqueia a interface. */
+  const espelharNoBanco = (patch) => {
+    try {
+      if (Array.isArray(patch.categories)) {
+        const antes = (data.categories || []).map((c) => c.id);
+        const agora = patch.categories.map((c) => c.id);
+        salvarCategorias(supabase, userId, patch.categories);
+        apagarCategorias(supabase, userId, antes.filter((id) => !agora.includes(id)));
+      }
+      if (Array.isArray(patch.tasks)) {
+        const antes = (data.tasks || []).map((t) => t.id);
+        const agora = patch.tasks.map((t) => t.id);
+        salvarMissoes(supabase, userId, patch.tasks);
+        apagarMissoes(supabase, userId, antes.filter((id) => !agora.includes(id)));
+      }
+    } catch (e) { /* espelho nunca derruba o jogo */ }
+  };
+
+  const update = (patch) => {
+    setData((prev) => ({ ...prev, ...patch }));
+    espelharNoBanco(patch);
+  };
+
+  /** Recomeçar do zero: sem limpar as tabelas, o backfill ressuscitaria
+   *  o jogo antigo no próximo load. O backup em arquivo já foi baixado
+   *  pela confirmação dupla antes de chegar aqui. */
+  const onResetAdventure = async () => {
+    await limparTudoDoUsuario(supabase, userId);
+    update(freshData());
+  };
 
   const buyCosmetic = (item) => {
     const cos = data.cosmetics || { owned: [], equipped: {} };
@@ -1091,7 +1164,7 @@ export default function RpgDaVida({ user, onSignOut }) {
         {tab === "avatar" && <Avatar data={data} level={level} journeyStage={journeyStage} petEnergy={tAvg} update={update} />}
         {tab === "saude" && <Saude data={data} addWater={addWater} toggleTask={toggleTask} update={update}
           medDone={(() => { const ids = (data.meds || []).map((m) => m.id); return ids.length > 0 && ids.every((id) => data.doneToday.includes(id)); })()} />}
-        {tab === "stats" && <Stats data={data} level={level} playerClass={playerClass} sound={sound} update={update} onSignOut={onSignOut} user={user} />}
+        {tab === "stats" && <Stats data={data} level={level} playerClass={playerClass} sound={sound} update={update} onSignOut={onSignOut} user={user} onResetAdventure={onResetAdventure} />}
       </main>
 
       {/* navegação inferior */}
@@ -2703,7 +2776,7 @@ function BossList({ data }) {
 }
 
 /* ---------- STATS + CONQUISTAS + AJUSTES ---------- */
-function Stats({ data, level, playerClass, sound, update, onSignOut, user }) {
+function Stats({ data, level, playerClass, sound, update, onSignOut, user, onResetAdventure }) {
   const fav = Object.entries(data.catCounts || {}).sort((a, b) => b[1] - a[1])[0];
   const favCat = fav ? catView(data, fav[0]) : null;
   const favLabel = fav && fav[1] > 0 ? `${favCat.emoji} ${favCat.nome}` : "—";
@@ -2793,19 +2866,106 @@ function Stats({ data, level, playerClass, sound, update, onSignOut, user }) {
         </div>
       </Panel>
 
+      {/* conferência do banco: só antes da virada e só depois do backfill */}
+      {!lendoDasTabelas() && data.backfillFase3Em && <PainelParidade data={data} user={user} />}
+
       <InstallSection />
 
       <NotificationsPanel user={user} />
 
       <AccountPanel user={user} />
 
-      <ResetAdventure data={data} onReset={() => update(freshData())} />
+      <ResetAdventure data={data} onReset={onResetAdventure} />
 
       <button onClick={onSignOut} style={{ color: C.parch }}
         className="flex w-full items-center justify-center gap-2 py-2 text-sm font-bold opacity-80">
         <LogOut size={16} /> Sair da conta
       </button>
     </div>
+  );
+}
+
+/* ---------- Painel de paridade (Fase 3) ----------
+   Aparece só antes da virada, e só depois do backfill. É por ele que o
+   dono do projeto decide se pode ligar a leitura pelas tabelas.        */
+function PainelParidade({ data, user }) {
+  const supabase = getSupabase();
+  const [estado, setEstado] = useState("carregando"); // carregando | ok | erro
+  const [contagem, setContagem] = useState(null);
+  const [faltando, setFaltando] = useState({ categorias: [], missoes: [] });
+
+  const conferir = async () => {
+    setEstado("carregando");
+    const c = await contarTudo(supabase, user.id);
+    if (c.categorias === null && c.missoes === null) { setEstado("erro"); return; }
+    setContagem(c);
+    const ids = await idsNoBanco(supabase, user.id);
+    setFaltando({
+      categorias: (data.categories || []).filter((x) => !ids.categorias.includes(x.id)).map((x) => x.nome),
+      missoes: (data.tasks || []).filter((x) => !ids.missoes.includes(x.id)).map((x) => x.name),
+    });
+    setEstado("ok");
+  };
+  useEffect(() => { conferir(); /* eslint-disable-next-line */ }, []);
+
+  const noJogo = { categorias: (data.categories || []).length, missoes: (data.tasks || []).length };
+  const bate = (a, b) => a === b;
+  const linha = (rotulo, jogo, banco) => (
+    <div className="flex items-center justify-between text-sm" style={{ color: C.ink }}>
+      <span>{rotulo}</span>
+      <span className="font-bold">
+        {jogo} no jogo / {banco ?? "—"} no banco{" "}
+        <span style={{ color: bate(jogo, banco) ? C.xpDeep : C.ember }}>{bate(jogo, banco) ? "✓" : "⚠️"}</span>
+      </span>
+    </div>
+  );
+
+  return (
+    <Panel style={{ borderColor: C.goldDeep }}>
+      <div style={{ color: C.ink }} className="font-serif font-bold">🗄️ Conferência do banco</div>
+      <p style={{ color: C.inkSoft }} className="mt-1 mb-2 text-xs">
+        Suas categorias e missões estão sendo copiadas para o banco. Quando os dois lados
+        baterem, dá para ligar a leitura pelas tabelas (veja o MIGRACAO.md).
+      </p>
+
+      {estado === "carregando" && <div style={{ color: C.inkSoft }} className="text-sm">Conferindo…</div>}
+      {estado === "erro" && (
+        <div style={{ color: C.ember }} className="text-sm font-bold">
+          Não consegui falar com o banco agora. Tente de novo daqui a pouco — nada foi perdido.
+        </div>
+      )}
+
+      {estado === "ok" && contagem && (
+        <div className="space-y-1">
+          {linha("Categorias", noJogo.categorias, contagem.categorias)}
+          {linha("Missões", noJogo.missoes, contagem.missoes)}
+          <div className="flex items-center justify-between text-sm" style={{ color: C.ink }}>
+            <span>Conclusões registradas</span>
+            <span className="font-bold">{contagem.conclusoes ?? "—"}</span>
+          </div>
+
+          {(faltando.categorias.length > 0 || faltando.missoes.length > 0) && (
+            <div className="mt-2 rounded-xl px-3 py-2 text-xs" style={{ background: "rgba(0,0,0,.05)", color: C.inkSoft }}>
+              <b>Ainda faltam no banco:</b>
+              {faltando.categorias.length > 0 && <div>Categorias: {faltando.categorias.join(", ")}</div>}
+              {faltando.missoes.length > 0 && <div>Missões: {faltando.missoes.join(", ")}</div>}
+              <div className="mt-1">Abra o app de novo com internet — a cópia recomeça sozinha.</div>
+            </div>
+          )}
+
+          {faltando.categorias.length === 0 && faltando.missoes.length === 0 && (
+            <div className="mt-2 rounded-xl px-3 py-2 text-xs font-bold"
+              style={{ background: "rgba(91,189,106,.15)", color: "#2a6b32" }}>
+              ✅ Tudo conferido. Pode seguir o MIGRACAO.md para ligar a leitura pelas tabelas.
+            </div>
+          )}
+        </div>
+      )}
+
+      <button onClick={conferir} style={{ color: C.goldDeep }} className="mt-2 text-xs font-bold">
+        Conferir de novo
+      </button>
+    </Panel>
   );
 }
 
