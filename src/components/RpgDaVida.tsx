@@ -1205,6 +1205,7 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
   const [adding, setAdding] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
+  const [showCats, setShowCats] = useState(false);
   const tasks = data.tasks || [];
   // Agrupamento dinâmico: segue a ordem escolhida pelo usuário. Categorias
   // desconhecidas caem num grupo de fallback em vez de quebrar a tela.
@@ -1316,12 +1317,18 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
         <span className="font-serif text-lg">Missões Diárias</span>
         <span className="flex items-center gap-3">
           <span style={{ color: C.gold }}>{doneCount}/{allTasks.length}</span>
-          <button onClick={() => { setEditMode((e) => !e); setEditingTask(null); setAdding(false); }}
+          <button onClick={() => { setShowCats((s) => !s); setEditMode(false); setEditingTask(null); setAdding(false); }}
+            style={{ color: showCats ? C.gold : C.parch2 }} className="flex items-center gap-1 text-xs font-bold">
+            ⚙️ Reinos
+          </button>
+          <button onClick={() => { setEditMode((e) => !e); setEditingTask(null); setAdding(false); setShowCats(false); }}
             style={{ color: editMode ? C.gold : C.parch2 }} className="flex items-center gap-1 text-xs font-bold">
             <Pencil size={14} /> {editMode ? "Pronto" : "Editar"}
           </button>
         </span>
       </div>
+
+      {showCats && <CategoryManager data={data} update={update} onClose={() => setShowCats(false)} />}
 
       {(adding || editingTask) && (
         <TaskForm data={data} initial={editingTask} onCancel={() => { setAdding(false); setEditingTask(null); }} onSave={saveTask} />
@@ -1392,6 +1399,161 @@ function EditableName({ data, update }) {
   return (
     <button onClick={() => { setVal(data.playerName); setEditing(true); }} style={{ color: C.ink }}
       className="font-serif text-2xl font-black leading-tight">{data.playerName} ✎</button>
+  );
+}
+
+/* ---------- REINOS (gestão de categorias) ----------
+   O usuário define as áreas da própria vida. Categorias de sistema
+   (pet/saude) são editáveis e reordenáveis, mas nunca desativadas ou
+   apagadas — elas sustentam o monstrinho e a aba Saúde.                */
+function CategoryManager({ data, update, onClose }) {
+  const cats = sortedCategories(data);
+  const activeCount = cats.filter((c) => c.ativa).length;
+  const atLimit = activeCount >= MAX_ACTIVE_CATS;
+  const [editingId, setEditingId] = useState(null);
+  const [adding, setAdding] = useState(false);
+
+  /** Persiste a lista já renumerando `ordem` pela posição. */
+  const commit = (list) => update({ categories: list.map((c, i) => ({ ...c, ordem: i })) });
+
+  const move = (idx, dir) => {
+    const next = [...cats];
+    const j = idx + dir;
+    if (j < 0 || j >= next.length) return;
+    [next[idx], next[j]] = [next[j], next[idx]];
+    commit(next);
+  };
+  const saveCat = (cat) => {
+    const exists = cats.some((c) => c.id === cat.id);
+    commit(exists ? cats.map((c) => (c.id === cat.id ? { ...c, ...cat } : c)) : [...cats, cat]);
+    setEditingId(null); setAdding(false);
+  };
+  const toggleAtiva = (cat) => {
+    if (cat.sistema) return;                       // sistema nunca desativa
+    if (!cat.ativa && atLimit) return;             // respeita o teto ao reativar
+    commit(cats.map((c) => (c.id === cat.id ? { ...c, ativa: !c.ativa } : c)));
+  };
+
+  return (
+    <Panel style={{ background: `linear-gradient(160deg, ${C.parch}, ${C.parch2})` }}>
+      <div className="mb-1 flex items-center justify-between">
+        <div style={{ color: C.ink }} className="font-serif text-lg font-black">⚙️ Seus Reinos</div>
+        <button onClick={onClose} style={{ color: C.inkSoft }} className="p-1"><X size={18} /></button>
+      </div>
+      <p style={{ color: C.inkSoft }} className="mb-3 text-xs">
+        As áreas da sua vida. Renomeie, troque o emoji e a cor, reordene — o jogo se adapta a você.
+        <b> {activeCount}/{MAX_ACTIVE_CATS}</b> ativas.
+      </p>
+
+      <div className="space-y-2">
+        {cats.map((c, i) => (
+          <div key={c.id}>
+            <div className="flex items-center gap-2 rounded-2xl p-2"
+              style={{ background: "rgba(0,0,0,.04)", borderLeft: `6px solid ${c.cor}`, opacity: c.ativa ? 1 : 0.55 }}>
+              <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-lg"
+                style={{ background: c.cor + "33" }}>{c.emoji}</span>
+              <span className="min-w-0 flex-1">
+                <span style={{ color: C.ink }} className="block truncate font-bold leading-tight">{c.nome}</span>
+                <span style={{ color: C.inkSoft }} className="block text-[10px] font-bold">
+                  {c.sistema === "pet" ? "🐾 alimenta o monstrinho" : c.sistema === "saude" ? "💙 usada na aba Saúde" : c.ativa ? "ativa" : "inativa"}
+                </span>
+              </span>
+              <span className="flex flex-shrink-0 flex-col">
+                <button onClick={() => move(i, -1)} disabled={i === 0} style={{ color: i === 0 ? "rgba(0,0,0,.2)" : C.inkSoft }}
+                  className="px-1 text-xs leading-none active:scale-90" aria-label="Subir">▲</button>
+                <button onClick={() => move(i, 1)} disabled={i === cats.length - 1} style={{ color: i === cats.length - 1 ? "rgba(0,0,0,.2)" : C.inkSoft }}
+                  className="px-1 text-xs leading-none active:scale-90" aria-label="Descer">▼</button>
+              </span>
+              <button onClick={() => { setEditingId(editingId === c.id ? null : c.id); setAdding(false); }}
+                style={{ color: C.inkSoft }} className="p-1 active:scale-90"><Pencil size={15} /></button>
+              {!c.sistema && (
+                <button onClick={() => toggleAtiva(c)} disabled={!c.ativa && atLimit}
+                  style={{ background: c.ativa ? C.xpDeep : "rgba(0,0,0,.12)", color: c.ativa ? "#fff" : C.inkSoft, opacity: !c.ativa && atLimit ? 0.5 : 1 }}
+                  className="flex-shrink-0 rounded-lg px-2 py-1 text-[10px] font-bold active:scale-95">
+                  {c.ativa ? "Ativa" : "Ativar"}
+                </button>
+              )}
+            </div>
+            {editingId === c.id && (
+              <CategoryForm initial={c} onCancel={() => setEditingId(null)} onSave={saveCat} />
+            )}
+          </div>
+        ))}
+      </div>
+
+      {adding ? (
+        <CategoryForm onCancel={() => setAdding(false)} onSave={saveCat} />
+      ) : atLimit ? (
+        <div style={{ color: C.inkSoft, background: "rgba(0,0,0,.04)" }} className="mt-3 rounded-2xl px-3 py-2 text-xs">
+          Você já tem <b>{MAX_ACTIVE_CATS} reinos ativos</b> — o máximo para a lista do dia continuar leve.
+          Desative um que não esteja usando para abrir espaço. Nada é apagado. 💛
+        </div>
+      ) : (
+        <button onClick={() => { setAdding(true); setEditingId(null); }} style={{ borderColor: C.goldDeep, color: C.ink }}
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed py-2.5 text-sm font-bold active:scale-95 transition">
+          <Plus size={16} /> Criar reino
+        </button>
+      )}
+
+      <p style={{ color: C.inkSoft }} className="mt-3 text-[11px]">
+        Reinos não são apagados — desativar esconde da lista do dia, mas guarda todo o histórico e as estatísticas.
+      </p>
+    </Panel>
+  );
+}
+
+function CategoryForm({ initial, onCancel, onSave }) {
+  const [nome, setNome] = useState(initial?.nome || "");
+  const [emoji, setEmoji] = useState(initial?.emoji || "⚔️");
+  const [cor, setCor] = useState(initial?.cor || TASK_COLORS[5]);
+  const submit = () => {
+    const n = nome.trim();
+    if (!n) return;
+    onSave({
+      ...(initial || { ativa: true, sistema: null, ordem: 999 }),
+      id: initial?.id || "cat_" + Math.random().toString(36).slice(2),
+      nome: n, emoji: emoji.trim() || "⚔️", cor,
+    });
+  };
+  return (
+    <div className="mt-2 rounded-2xl p-3" style={{ background: "rgba(255,255,255,.55)", border: `2px solid ${C.goldDeep}` }}>
+      <div className="mb-2 flex items-center gap-2 rounded-xl p-2" style={{ background: "rgba(0,0,0,.04)", borderLeft: `6px solid ${cor}` }}>
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl text-lg" style={{ background: cor + "33" }}>{emoji}</span>
+        <span style={{ color: C.ink }} className="truncate font-bold">{nome.trim() || "Novo reino"}</span>
+      </div>
+
+      <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome do reino (ex.: Estudos)" maxLength={24}
+        style={{ borderColor: C.goldDeep, color: C.ink }} className="mb-2 w-full rounded-xl border-2 bg-white/70 px-3 py-2 outline-none" />
+
+      <div className="mb-1 flex items-center justify-between">
+        <span style={{ color: C.inkSoft }} className="text-xs font-bold">Emoji</span>
+        <input value={emoji} onChange={(e) => setEmoji(e.target.value.slice(0, 2))} maxLength={2} aria-label="Emoji personalizado"
+          style={{ borderColor: C.goldDeep, color: C.ink }} className="w-14 rounded-lg border-2 bg-white/70 px-2 py-1 text-center outline-none" />
+      </div>
+      <div className="mb-3 flex flex-wrap gap-1.5" style={{ maxHeight: 100, overflowY: "auto" }}>
+        {TASK_ICONS.map((ic) => (
+          <button key={ic} onClick={() => setEmoji(ic)}
+            style={{ background: emoji === ic ? cor + "44" : "rgba(0,0,0,.05)", border: emoji === ic ? `2px solid ${cor}` : "2px solid transparent" }}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-base active:scale-90 transition">{ic}</button>
+        ))}
+      </div>
+
+      <div style={{ color: C.inkSoft }} className="mb-1 text-xs font-bold">Cor</div>
+      <div className="mb-3 flex flex-wrap gap-2">
+        {TASK_COLORS.map((c) => (
+          <button key={c} onClick={() => setCor(c)} aria-label={`Cor ${c}`}
+            style={{ background: c, border: cor === c ? `3px solid ${C.ink}` : "2px solid rgba(0,0,0,.15)" }}
+            className="h-8 w-8 rounded-full active:scale-90 transition" />
+        ))}
+      </div>
+
+      <div className="flex gap-2">
+        <button onClick={onCancel} style={{ color: C.inkSoft }} className="flex-1 rounded-xl py-2 text-sm font-bold">Cancelar</button>
+        <button onClick={submit} style={{ background: C.xpDeep, color: "#fff" }} className="flex-1 rounded-xl py-2 text-sm font-bold">
+          {initial ? "Salvar" : "Criar"}
+        </button>
+      </div>
+    </div>
   );
 }
 
