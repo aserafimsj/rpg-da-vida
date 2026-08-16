@@ -1327,6 +1327,13 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
     ...known.map((c) => ({ cat: c, list: byCat[c.id] })),
     ...unknown.map((k) => ({ cat: catView(data, k), list: byCat[k] })),
   ];
+  // Missões que hoje não estão na lista (outra recorrência, categoria inativa,
+  // única já concluída ou vencida) continuam acessíveis no modo Editar —
+  // some da rotina do dia, nunca do controle do usuário.
+  const shown = {};
+  visibleTasks.forEach((t) => { shown[t.id] = true; });
+  skippedTasks.forEach((t) => { shown[t.id] = true; });
+  const outOfDay = editMode ? tasks.filter((t) => !shown[t.id]) : [];
   const doneCount = allTasks.filter((t) => data.doneToday.includes(t.id)).length;
 
   const saveTask = (task) => {
@@ -1334,7 +1341,11 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
     update({ tasks: exists ? tasks.map((t) => (t.id === task.id ? task : t)) : [...tasks, task] });
     setAdding(false); setEditingTask(null);
   };
-  const removeTask = (id) => update({ tasks: tasks.filter((t) => t.id !== id), doneToday: data.doneToday.filter((x) => x !== id) });
+  const removeTask = (id) => update({
+    tasks: tasks.filter((t) => t.id !== id),
+    doneToday: data.doneToday.filter((x) => x !== id),
+    skippedToday: { date: dayKey(), ids: ((data.skippedToday || {}).ids || []).filter((x) => x !== id) },
+  });
 
   return (
     <div className="space-y-4">
@@ -1484,6 +1495,31 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
           })}
         </div>
       ))}
+
+      {/* fora do dia — só no modo Editar, para nada ficar inacessível */}
+      {editMode && outOfDay.length > 0 && (
+        <div className="space-y-2">
+          <div style={{ color: C.parch2 }} className="px-1 text-xs font-bold">
+            Fora da lista de hoje ({outOfDay.length}) — outra recorrência, categoria inativa ou já encerrada
+          </div>
+          {outOfDay.map((t) => (
+            <div key={t.id} className="flex items-center gap-2">
+              <button onClick={() => setEditingTask(t)}
+                style={{ background: "rgba(244,230,197,.25)", border: `2px dashed ${C.goldDeep}` }}
+                className="flex flex-1 items-center gap-2.5 rounded-2xl p-2.5 text-left active:scale-[.98] transition">
+                <span style={{ background: taskColor(t, data) + "22" }}
+                  className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl text-base opacity-70">{taskIcon(t, data)}</span>
+                <span className="min-w-0 flex-1">
+                  <span style={{ color: C.parch }} className="block truncate text-sm font-bold">{t.name}</span>
+                  <span style={{ color: C.parch2 }} className="block text-[10px]">{catView(data, t.category).nome} · {recorrenciaLabel(t)}</span>
+                </span>
+                <Pencil size={14} style={{ color: C.parch2 }} />
+              </button>
+              <button onClick={() => removeTask(t.id)} style={{ color: C.ember }} className="p-1 active:scale-90 transition"><Trash2 size={16} /></button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* puladas hoje — recolhido, sem tom de cobrança */}
       {skippedTasks.length > 0 && (
@@ -1701,15 +1737,43 @@ function TaskForm({ data, initial, onCancel, onSave }) {
   const [desc, setDesc] = useState(initial?.desc || "");
   const [xp, setXp] = useState(initial?.xp || 10);
   const [cat, setCat] = useState(initial?.category || cats[0]?.id || "casa");
-  const [days, setDays] = useState(initial?.days || []);
+  const r0 = recorrenciaOf(initial || {});
+  const [days, setDays] = useState(initial?.days || (r0.tipo === "dias_semana" ? r0.dias : []) || []);
   const [icon, setIcon] = useState(initial ? taskIcon(initial, data) : "⚔️");
   const [color, setColor] = useState(initial?.color || TASK_COLORS[2]);
+  const [dif, setDif] = useState(initial ? dificuldadeOf(initial) : "normal");
+  const [rtipo, setRtipo] = useState(r0.tipo);
+  const [rn, setRn] = useState(r0.tipo === "a_cada_n_dias" ? r0.n : 3);
+  const [rdata, setRdata] = useState(r0.tipo === "unica" ? r0.data : dayKey());
   const WD = [["Dom", 0], ["Seg", 1], ["Ter", 2], ["Qua", 3], ["Qui", 4], ["Sex", 5], ["Sáb", 6]];
   const toggleDay = (n) => setDays((d) => (d.includes(n) ? d.filter((x) => x !== n) : [...d, n].sort((a, b) => a - b)));
+  const difInfo = DIFICULDADES.find((d) => d.id === dif) || DIFICULDADES[1];
+  /** Trocar a dificuldade sugere a escala de XP, sem travar a escolha. */
+  const pickDif = (id) => {
+    setDif(id);
+    const info = DIFICULDADES.find((d) => d.id === id);
+    if (info && !info.xpSug.includes(xp)) {
+      const [lo, hi] = info.xpSug;
+      if (xp < lo || xp > hi) setXp(lo);
+    }
+  };
+  const buildRecorrencia = () => {
+    if (rtipo === "dias_semana") {
+      return days.length && days.length < 7 ? { tipo: "dias_semana", dias: days } : { tipo: "sempre" };
+    }
+    if (rtipo === "a_cada_n_dias") {
+      const ancora = (r0.tipo === "a_cada_n_dias" && r0.ancora) ? r0.ancora : dayKey();
+      return { tipo: "a_cada_n_dias", n: Math.max(1, Number(rn) || 1), ancora };
+    }
+    if (rtipo === "unica") return { tipo: "unica", data: rdata || dayKey() };
+    return { tipo: "sempre" };
+  };
   const submit = () => {
     if (!name.trim()) return;
-    const t = { ...(initial || {}), id: initial?.id || "c_" + Math.random().toString(36).slice(2), name: name.trim(), desc: desc.trim(), xp, category: cat, icon, color };
-    if (days.length) t.days = days; else delete t.days;
+    const t = { ...(initial || {}), id: initial?.id || "c_" + Math.random().toString(36).slice(2), name: name.trim(), desc: desc.trim(), xp, category: cat, icon, color, dificuldade: dif };
+    t.recorrencia = buildRecorrencia();
+    // `days` é mantido em sincronia só por retrocompatibilidade desta fase
+    if (t.recorrencia.tipo === "dias_semana") t.days = t.recorrencia.dias; else delete t.days;
     onSave(t);
   };
   return (
@@ -1757,21 +1821,69 @@ function TaskForm({ data, initial, onCancel, onSave }) {
             className="truncate rounded-xl px-2 py-2 text-sm font-bold">{c.emoji} {c.nome}</button>
         ))}
       </div>
+      {/* dificuldade (declarada) */}
+      <div className="mb-2">
+        <div style={{ color: C.inkSoft }} className="mb-1 text-xs font-bold">Dificuldade</div>
+        <div className="flex gap-2">
+          {DIFICULDADES.map((d) => (
+            <button key={d.id} onClick={() => pickDif(d.id)}
+              style={{ background: dif === d.id ? C.ink : "rgba(0,0,0,.06)", color: dif === d.id ? C.parch : C.ink }}
+              className="flex-1 rounded-xl py-1.5 text-xs font-bold leading-tight">
+              <span className="block text-base">{d.emoji}</span>
+              {d.label}
+              <span className="block text-[9px] font-normal opacity-70">{d.hint}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="mb-2 flex items-center gap-2">
         <span style={{ color: C.ink }} className="text-sm font-bold">XP:</span>
-        {[5, 10, 15, 20].map((n) => (
-          <button key={n} onClick={() => setXp(n)} style={{ background: xp === n ? C.xpDeep : "rgba(0,0,0,.06)", color: xp === n ? "#fff" : C.ink }}
+        {[3, 5, 10, 15, 20, 30].map((n) => (
+          <button key={n} onClick={() => setXp(n)}
+            style={{ background: xp === n ? C.xpDeep : "rgba(0,0,0,.06)", color: xp === n ? "#fff" : C.ink }}
             className="flex-1 rounded-lg py-1.5 text-sm font-bold">{n}</button>
         ))}
       </div>
+      <div style={{ color: C.inkSoft }} className="mb-3 text-[11px]">
+        Sugestão para {difInfo.emoji} {difInfo.label}: {difInfo.xpSug[0]}–{difInfo.xpSug[1]} XP — mas quem manda é você.
+      </div>
+
+      {/* recorrência */}
       <div className="mb-3">
-        <div style={{ color: C.inkSoft }} className="mb-1 text-xs font-bold">Dias da semana (vazio = todo dia)</div>
-        <div className="flex gap-1">
-          {WD.map(([lbl, n]) => (
-            <button key={n} onClick={() => toggleDay(n)} style={{ background: days.includes(n) ? C.gold : "rgba(0,0,0,.06)", color: days.includes(n) ? C.ink : C.inkSoft }}
-              className="flex-1 rounded-lg py-1.5 text-[11px] font-bold">{lbl}</button>
+        <div style={{ color: C.inkSoft }} className="mb-1 text-xs font-bold">Quando aparece</div>
+        <div className="mb-2 grid grid-cols-2 gap-2">
+          {RECORRENCIA_TIPOS.map((r) => (
+            <button key={r.id} onClick={() => setRtipo(r.id)}
+              style={{ background: rtipo === r.id ? C.gold : "rgba(0,0,0,.06)", color: rtipo === r.id ? C.ink : C.inkSoft }}
+              className="rounded-xl py-1.5 text-xs font-bold">{r.emoji} {r.label}</button>
           ))}
         </div>
+
+        {rtipo === "dias_semana" && (
+          <div className="flex gap-1">
+            {WD.map(([lbl, n]) => (
+              <button key={n} onClick={() => toggleDay(n)} style={{ background: days.includes(n) ? C.gold : "rgba(0,0,0,.06)", color: days.includes(n) ? C.ink : C.inkSoft }}
+                className="flex-1 rounded-lg py-1.5 text-[11px] font-bold">{lbl}</button>
+            ))}
+          </div>
+        )}
+        {rtipo === "a_cada_n_dias" && (
+          <div className="flex items-center gap-2">
+            <span style={{ color: C.ink }} className="text-sm font-bold">A cada</span>
+            <input type="number" min={1} max={365} value={rn}
+              onChange={(e) => setRn(Math.max(1, parseInt(e.target.value) || 1))}
+              style={{ borderColor: C.goldDeep, color: C.ink }} className="w-20 rounded-xl border-2 bg-white/60 px-3 py-1.5 text-center outline-none" />
+            <span style={{ color: C.ink }} className="text-sm font-bold">dia(s)</span>
+          </div>
+        )}
+        {rtipo === "unica" && (
+          <div className="flex items-center gap-2">
+            <span style={{ color: C.ink }} className="text-sm font-bold">No dia</span>
+            <input type="date" value={rdata} onChange={(e) => setRdata(e.target.value)}
+              style={{ borderColor: C.goldDeep, color: C.ink }} className="flex-1 rounded-xl border-2 bg-white/60 px-3 py-1.5 outline-none" />
+          </div>
+        )}
       </div>
       <div className="flex gap-2">
         <button onClick={onCancel} style={{ color: C.inkSoft }} className="flex-1 rounded-xl py-2 text-sm font-bold">Cancelar</button>
@@ -1782,7 +1894,7 @@ function TaskForm({ data, initial, onCancel, onSave }) {
 }
 
 /* ---------- MODO FOCO ---------- */
-function FocusOverlay({ data, pending, onClose, onDone }) {
+function FocusOverlay({ data, pending, onClose, onDone, onSkip }) {
   const [i, setI] = useState(0);
   const list = pending;
   const t = list[i];
@@ -1808,14 +1920,21 @@ function FocusOverlay({ data, pending, onClose, onDone }) {
         style={{ background: taskColor(t, data) + "33", border: `4px solid ${taskColor(t, data)}`, animation: "float 3s ease-in-out infinite" }}>{taskIcon(t, data)}</div>
       <div style={{ color: C.parch }} className="font-serif text-3xl font-black leading-tight">{t.name}</div>
       <div style={{ color: C.parch2 }} className="mt-2">{t.desc}</div>
+      <div style={{ color: C.parch2 }} className="mt-2 text-xs font-bold">
+        {dificuldadeInfo(t).emoji} {dificuldadeInfo(t).label} · {dificuldadeInfo(t).hint}
+      </div>
       <div style={{ color: C.gold }} className="mt-3 font-bold">Recompensa: +{t.xp} XP</div>
       <button onClick={() => { onDone(t); }} style={{ background: C.xp, color: "#06250d", boxShadow: "0 6px 0 #2a6b32" }}
         className="mt-8 flex items-center gap-2 rounded-3xl px-10 py-4 font-serif text-xl font-black active:translate-y-1 active:shadow-none transition">
         <Check size={26} strokeWidth={3} /> Concluir
       </button>
+      {/* pular registra de verdade: a missão sai do dia, sem punição */}
+      <button onClick={() => { onSkip && onSkip(t); setI(0); }} style={{ color: C.parch2 }} className="mt-4 text-sm font-bold">
+        ↷ Pular esta hoje
+      </button>
       {list.length > 1 && (
-        <button onClick={() => setI((x) => (x + 1) % list.length)} style={{ color: C.parch2 }} className="mt-4 text-sm font-bold">
-          Pular para a próxima →
+        <button onClick={() => setI((x) => (x + 1) % list.length)} style={{ color: C.parch2 }} className="mt-2 text-xs font-bold opacity-70">
+          Ver a próxima →
         </button>
       )}
     </div>
@@ -2460,11 +2579,12 @@ function Saude({ data, addWater, toggleTask, update, medDone }) {
 
   const healthCat = systemCategoryId(data, "saude");
   const addMed = (period, m) => {
-    update({ meds: [...meds, { id: "m_" + Math.random().toString(36).slice(2), name: m.name, desc: m.dose, xp: m.xp, category: healthCat, period, med: true }] });
+    // remédios e refeições são micro-ações por natureza: sempre "rápida"
+    update({ meds: [...meds, { id: "m_" + Math.random().toString(36).slice(2), name: m.name, desc: m.dose, xp: m.xp, category: healthCat, period, med: true, dificuldade: "rapida" }] });
     setAddP(null);
   };
   const removeMed = (id) => update({ meds: meds.filter((m) => m.id !== id), doneToday: data.doneToday.filter((x) => x !== id) });
-  const addMeal = (m) => { update({ meals: [...meals, { id: "meal_" + Math.random().toString(36).slice(2), name: m.name, xp: m.xp }] }); setAddingMeal(false); };
+  const addMeal = (m) => { update({ meals: [...meals, { id: "meal_" + Math.random().toString(36).slice(2), name: m.name, xp: m.xp, dificuldade: "rapida" }] }); setAddingMeal(false); };
   const removeMeal = (id) => update({ meals: meals.filter((m) => m.id !== id), doneToday: data.doneToday.filter((x) => x !== id) });
 
   const AddMedButton = ({ period }) => (
