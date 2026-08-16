@@ -15,10 +15,10 @@ import {
 } from "lucide-react";
 
 /* ============================================================
-   RPG DA VIDA — Habit Tracker gamificado para mentes com TDAH
-   Single-file React app. Salvamento via window.storage (persiste
-   entre sessões). Estrutura de dados desenhada para migrar fácil
-   para Supabase: cada "tabela" é uma chave do objeto `data`.
+   QuesTAH — Habit Tracker gamificado para mentes com TDAH
+   Single-file React app. O save é um único JSON por usuário,
+   persistido na nuvem (Supabase, tabela `saves`) via lib/save.ts,
+   com debounce. Cada "tabela" do jogo é uma chave do objeto `data`.
    ============================================================ */
 
 /* ---------- Tema / cores (inline styles: o runtime não compila
@@ -40,6 +40,13 @@ const C = {
   panelLine: "rgba(58,42,24,0.18)",
 };
 
+/* ---------- Categorias ----------
+   As categorias são DADO (data.categories), não constante. `CATS` sobrevive
+   apenas como fonte da migração de saves antigos — nenhuma tela lê daqui.
+   Formato de cada categoria:
+   { id, nome, emoji, cor, ordem, ativa, sistema: 'pet' | 'saude' | null }
+   Categorias de sistema são renomeáveis/recoloríveis/reordenáveis, mas nunca
+   desativadas nem apagadas: elas alimentam o monstrinho e a aba Saúde.        */
 const CATS = {
   pet: { label: "Mona", emoji: "🐾", color: C.rose },
   casa: { label: "Casa", emoji: "🏠", color: C.sky },
@@ -47,6 +54,56 @@ const CATS = {
   trabalho: { label: "Trabalho", emoji: "💼", color: "#8a6bd1" },
   saude: { label: "Saúde", emoji: "💙", color: "#34b3a0" },
 };
+const LEGACY_CAT_ORDER = ["pet", "casa", "pessoal", "trabalho", "saude"];
+const CAT_SISTEMA = { pet: "pet", saude: "saude" };
+const MAX_ACTIVE_CATS = 8;
+
+/** Categorias de um save antigo: preserva exatamente o que o usuário já via. */
+function legacyCategories() {
+  return LEGACY_CAT_ORDER.map((id, i) => ({
+    id, nome: CATS[id].label, emoji: CATS[id].emoji, cor: CATS[id].color,
+    ordem: i, ativa: true, sistema: CAT_SISTEMA[id] || null,
+  }));
+}
+/** Categorias de um usuário novo: genéricas, sem referências pessoais. */
+function freshCategories() {
+  return [
+    { id: "pet", nome: "Pet", emoji: "🐾", cor: C.rose, ordem: 0, ativa: true, sistema: "pet" },
+    { id: "casa", nome: "Casa", emoji: "🏠", cor: C.sky, ordem: 1, ativa: true, sistema: null },
+    { id: "pessoal", nome: "Pessoal", emoji: "🌱", cor: C.gold, ordem: 2, ativa: true, sistema: null },
+    { id: "trabalho", nome: "Trabalho", emoji: "💼", cor: "#8a6bd1", ordem: 3, ativa: true, sistema: null },
+    { id: "saude", nome: "Saúde", emoji: "❤️", cor: "#34b3a0", ordem: 4, ativa: true, sistema: "saude" },
+  ];
+}
+
+/* ---------- Helpers de categoria (únicos pontos de leitura) ---------- */
+const CAT_FALLBACK = { nome: "Aventura", emoji: "⚔️", cor: C.gold, ordem: 999, ativa: true, sistema: null };
+function categoriesOf(data) {
+  return Array.isArray(data?.categories) ? data.categories : [];
+}
+/** Categoria crua, ou null se o id não existir. */
+function getCategory(data, id) {
+  return categoriesOf(data).find((c) => c.id === id) || null;
+}
+/** Sempre devolve algo renderizável — nunca quebra com id desconhecido. */
+function catView(data, id) {
+  return getCategory(data, id) || { ...CAT_FALLBACK, id: id || "outros" };
+}
+function sortedCategories(data) {
+  return [...categoriesOf(data)].sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0));
+}
+function activeCategories(data) {
+  return sortedCategories(data).filter((c) => c.ativa);
+}
+/** Id da categoria que carrega um comportamento especial ('pet' | 'saude'). */
+function systemCategoryId(data, sistema) {
+  return categoriesOf(data).find((c) => c.sistema === sistema)?.id || sistema;
+}
+/** Uma categoria inativa deixa de ser oferecida, mas nunca esconde o histórico. */
+function isCategoryOffered(data, id) {
+  const c = getCategory(data, id);
+  return c ? !!c.ativa : true; // id desconhecido: mostra, nunca some em silêncio
+}
 
 /* ---------- Ícones e cores das missões ---------- */
 const TASK_ICONS = [
@@ -60,27 +117,29 @@ const DEFAULT_TASK_ICON = {
   torneiras: "🚰", filtro: "🥤", luzes: "💡", janela: "🪟", geladeira: "❄️", lixo: "🗑️",
   chave: "🔑", carteira: "👛", celular: "📱",
 };
-const CAT_FALLBACK_ICON = { pet: "🐾", casa: "🏠", pessoal: "🎒", trabalho: "💼", saude: "💙" };
-function taskIcon(t) {
-  return t?.icon || DEFAULT_TASK_ICON[t?.key] || CAT_FALLBACK_ICON[t?.category] || "⚔️";
+function taskIcon(t, data) {
+  return t?.icon || DEFAULT_TASK_ICON[t?.key] || catView(data, t?.category).emoji || "⚔️";
 }
-function taskColor(t) {
-  return t?.color || CATS[t?.category]?.color || C.gold;
+function taskColor(t, data) {
+  return t?.color || catView(data, t?.category).cor || C.gold;
 }
 
-/* ---------- Tarefas iniciais ---------- */
+/* ---------- Tarefas iniciais (só para usuários novos) ----------
+   Textos genéricos de propósito: as missões de um save existente são dado
+   do usuário e nunca são reescritas por aqui. As `key` são preservadas
+   porque conquistas e contadores dependem delas.                            */
 const BASE_TASKS = [
-  { id: "t_comida", key: "comida_mona", name: "Colocar comida para a Mona", desc: "Encha o potinho", xp: 10, category: "pet", need: "hunger", icon: "🍖" },
-  { id: "t_agua", key: "agua_mona", name: "Tem água para a Mona", desc: "Água fresca no pote", xp: 5, category: "pet", need: "thirst", icon: "💧" },
-  { id: "t_areia", key: "areia", name: "Areia limpa", desc: "Caixa de areia em ordem", xp: 10, category: "pet", need: "hygiene", icon: "🧹" },
-  { id: "t_brincar", key: "brincar_mona", name: "Brincar com a Mona", desc: "Um tempinho de carinho e brincadeira", xp: 10, category: "pet", need: "fun", icon: "🧶" },
-  { id: "t_guarda", key: "guarda_roupa", name: "Mona fora do guarda-roupa", desc: "Confira antes de fechar", xp: 10, category: "pet", icon: "🐱" },
+  { id: "t_comida", key: "comida_mona", name: "Colocar comida para o pet", desc: "Encha o potinho", xp: 10, category: "pet", need: "hunger", icon: "🍖" },
+  { id: "t_agua", key: "agua_mona", name: "Água fresca para o pet", desc: "Troque a água do pote", xp: 5, category: "pet", need: "thirst", icon: "💧" },
+  { id: "t_areia", key: "areia", name: "Limpar o espaço do pet", desc: "Caixa de areia ou cantinho em ordem", xp: 10, category: "pet", need: "hygiene", icon: "🧹" },
+  { id: "t_brincar", key: "brincar_mona", name: "Brincar com o pet", desc: "Um tempinho de carinho e brincadeira", xp: 10, category: "pet", need: "fun", icon: "🧶" },
+  { id: "t_guarda", key: "guarda_roupa", name: "Pet em segurança", desc: "Confira os cantinhos antes de fechar", xp: 10, category: "pet", icon: "🐱" },
   { id: "t_torneira", key: "torneiras", name: "Torneiras fechadas", desc: "Cozinha e banheiro", xp: 5, category: "casa", icon: "🚰" },
   { id: "t_filtro", key: "filtro", name: "Filtro fechado", desc: "Sem desperdício", xp: 5, category: "casa", icon: "🥤" },
   { id: "t_luzes", key: "luzes", name: "Luzes desligadas", desc: "Economia ligada", xp: 5, category: "casa", icon: "💡" },
   { id: "t_janela", key: "janela", name: "Janela fechada", desc: "Casa segura", xp: 5, category: "casa", icon: "🪟" },
   { id: "t_geladeira", key: "geladeira", name: "Geladeira fechada", desc: "Porta bem encostada", xp: 5, category: "casa", icon: "❄️" },
-  { id: "t_lixo", key: "lixo", name: "Lixo para fora", desc: "Só ter, qui e sáb", xp: 15, category: "casa", days: [2, 4, 6], icon: "🗑️" },
+  { id: "t_lixo", key: "lixo", name: "Lixo para fora", desc: "Nos dias de coleta", xp: 15, category: "casa", icon: "🗑️" },
   { id: "t_chave", key: "chave", name: "Pegou a chave", desc: "Antes de sair", xp: 5, category: "pessoal", icon: "🔑" },
   { id: "t_carteira", key: "carteira", name: "Pegou a carteira", desc: "Antes de sair", xp: 5, category: "pessoal", icon: "👛" },
   { id: "t_celular", key: "celular", name: "Pegou o celular", desc: "Antes de sair", xp: 5, category: "pessoal", icon: "📱" },
@@ -125,7 +184,7 @@ const ACHIEVEMENTS = [
   { id: "streak30", name: "Chama Eterna", emoji: "🏆", desc: "Mantenha 30 dias seguidos", check: (s) => s.longestStreak >= 30 },
   { id: "tasks100", name: "Centurião", emoji: "💯", desc: "Conclua 100 tarefas", check: (s) => s.tasksCompleted >= 100 },
   { id: "xp1000", name: "Mil de XP", emoji: "✨", desc: "Acumule 1000 de XP", check: (s) => s.xpTotal >= 1000 },
-  { id: "mona_master", name: "Mestre da Mona", emoji: "🐱", desc: "Cuide da Mona 20 vezes", check: (s) => (s.catCounts.pet || 0) >= 20 },
+  { id: "mona_master", name: "Melhor Amigo", emoji: "🐱", desc: "Cuide do seu pet 20 vezes", check: (s) => (s.catCounts.pet || 0) >= 20 },
   { id: "fridge_guard", name: "Guardião da Geladeira", emoji: "🧊", desc: "Feche a geladeira 15 vezes", check: (s) => (s.taskCounts.geladeira || 0) >= 15 },
   { id: "med_supreme", name: "Remédios Supremo", emoji: "💊", desc: "Remédios completos por 30 dias", check: (s) => (s.medDaysTotal || 0) >= 30 },
 ];
@@ -248,10 +307,10 @@ function MonSprite({ type, stage, size = 150, alive = true }) {
 /* ---------- Mapa da jornada ---------- */
 const JOURNEY = [
   { name: "Vila do Caos", xp: 0, emoji: "🏚️" },
-  { name: "Aprendiz da Organização", xp: 300, emoji: "🧹" },
-  { name: "Guardião da Casa", xp: 900, emoji: "🛡️" },
+  { name: "Aprendiz da Ordem", xp: 300, emoji: "🧹" },
+  { name: "Guardião da Jornada", xp: 900, emoji: "🛡️" },
   { name: "Mestre da Rotina", xp: 2000, emoji: "⚔️" },
-  { name: "Lenda Doméstica", xp: 4000, emoji: "🏰" },
+  { name: "Lenda Viva", xp: 4000, emoji: "🏰" },
 ];
 
 /* ---------- Pet (genérico) ---------- */
@@ -269,7 +328,7 @@ const PET_SPECIES = [
   { id: "urso", label: "Urso", emoji: "🐻" },
 ];
 const PET_COLORS = ["#ffffff", "#f4c542", "#e2a16f", "#b97a56", "#8a8f99", "#3a3a44", "#f6a5c0", "#9ad0c2"];
-const DEFAULT_PET = { name: "Mona", species: "gato", color: "#ffffff" };
+const DEFAULT_PET = { name: "Monstrinho", species: "gato", color: "#ffffff" };
 
 /* ---------- Ilustrações (imagens reais) ---------- */
 const IMG_SPECIES = ["gato"]; // espécies com ilustração pronta (sem cor/SVG)
@@ -355,7 +414,15 @@ const FUN_MSGS = {
   casa: ["Você derrotou o Monstro da Pia Aberta", "Geladeira protegida com sucesso", "O Caos recuou um passo"],
   pessoal: ["Herói preparado para a jornada", "Mente e corpo em sincronia", "Mais um passo na disciplina"],
   trabalho: ["Missão de trabalho concluída 💼", "Produtividade em alta, herói", "Mais uma pendência derrotada"],
-  saude: ["Glicemia sob controle, herói 💙", "Seu corpo agradece o cuidado", "Mais um passo pela sua saúde"],
+  saude: ["Seu corpo agradece o cuidado 💙", "Buff de vitalidade ativado", "Mais um passo pela sua saúde"],
+  // usado por qualquer categoria criada pelo usuário
+  generic: [
+    "O Caos recuou um passo",
+    "Mais uma missão riscada do pergaminho",
+    "Sua lenda ficou um pouco maior ✨",
+    "Golpe certeiro na procrastinação",
+    "Herói em movimento — continue assim",
+  ],
 };
 
 /* ---------- Curva de XP ---------- */
@@ -396,7 +463,8 @@ const DEFAULT_DATA = {
   doneToday: [],
   scoredToday: { date: dayKey(), ids: [] }, // anti-farm: o que já pontuou hoje
   lastResetDate: dayKey(),
-  tasks: null,   // semeado em freshData()/migração
+  tasks: null,      // semeado em freshData()/migração
+  categories: null, // semeado em freshData()/migração
   meds: [],      // remédios do usuário (manhã/noite)
   meals: null,   // refeições nomeadas (semeado)
   rewards: DEFAULT_REWARDS,
@@ -443,6 +511,7 @@ function freshData() {
     water: { date: dayKey(), count: 0 },
     waterScored: { date: dayKey(), cups: 0 },
     tasks: BASE_TASKS.map((t) => ({ ...t })),
+    categories: freshCategories(),
     meds: [],
     meals: MEAL_DEFAULTS.map((m) => ({ ...m })),
     pet: { ...DEFAULT_PET },
@@ -515,6 +584,10 @@ export default function RpgDaVida({ user, onSignOut }) {
 
       // ---- migração de saves antigos (preserva o progresso) ----
       if (loaded) {
+        // Categorias viram dado. Um save anterior à Fase 1 recebe exatamente as
+        // 5 categorias que ele já via (labels antigos inclusive), reusando as
+        // chaves como id — assim nenhuma missão precisa ser reescrita.
+        if (!Array.isArray(loaded.categories)) d.categories = legacyCategories();
         if (loaded.tasks === undefined || loaded.tasks === null) {
           d.tasks = [...BASE_TASKS.map((t) => ({ ...t })), ...((loaded.customTasks) || [])];
         }
@@ -549,6 +622,15 @@ export default function RpgDaVida({ user, onSignOut }) {
         if (typeof d.gameBest !== "number") d.gameBest = 0;
       }
       delete d.customTasks; delete d.customMeds;
+
+      // rede de segurança: o app nunca roda sem categorias, e as de sistema
+      // (pet/saude) são sempre ativas — elas sustentam o monstrinho e a Saúde.
+      if (!Array.isArray(d.categories) || !d.categories.length) d.categories = freshCategories();
+      d.categories = d.categories.map((c, i) => ({
+        ...c,
+        ordem: typeof c.ordem === "number" ? c.ordem : i,
+        ativa: c.sistema ? true : c.ativa !== false,
+      }));
 
       // reset diário
       const today = dayKey();
