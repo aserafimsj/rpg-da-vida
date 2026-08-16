@@ -1071,7 +1071,11 @@ function VillageMap({ go }) {
         ))}
         <button onClick={() => go("stats")} aria-label="Mestre"
           style={{ position: "absolute", left: "45%", top: "79%", width: "12%" }} className="active:scale-95 transition">
-          <img src="/mestre_azul.png" alt="Mestre" className="imgpx" style={{ width: "100%", filter: "drop-shadow(0 2px 3px rgba(0,0,0,.5))" }} />
+          {/* a arte do Mestre é opcional: se o arquivo não existir, some sem
+              quebrar o layout — o hotspot continua clicável */}
+          <img src="/mestre_azul.png" alt="Mestre" className="imgpx"
+            onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
+            style={{ width: "100%", filter: "drop-shadow(0 2px 3px rgba(0,0,0,.5))" }} />
         </button>
       </div>
       <div className="font-pixel mt-3 text-center" style={{ color: C.inkSoft, fontSize: 8 }}>Toque num predio pra entrar</div>
@@ -2684,14 +2688,97 @@ function Stats({ data, level, playerClass, sound, update, onSignOut, user }) {
 
       <AccountPanel user={user} />
 
-      <button onClick={() => { if (confirm("Recomeçar a aventura do zero? Tudo será apagado.")) { update(freshData()); } }}
-        style={{ color: C.ember }} className="w-full py-2 text-xs font-bold">Recomeçar aventura</button>
+      <ResetAdventure data={data} onReset={() => update(freshData())} />
 
       <button onClick={onSignOut} style={{ color: C.parch }}
         className="flex w-full items-center justify-center gap-2 py-2 text-sm font-bold opacity-80">
         <LogOut size={16} /> Sair da conta
       </button>
     </div>
+  );
+}
+
+/* ---------- Recomeçar aventura (destrutivo: 2 etapas + backup) ---------- */
+function ResetAdventure({ data, onReset }) {
+  const [step, setStep] = useState(0);        // 0 fechado · 1 explicação · 2 confirmação escrita
+  const [txt, setTxt] = useState("");
+  const [saved, setSaved] = useState(false);
+  const PALAVRA = "RECOMEÇAR";
+
+  const baixarBackup = () => {
+    try {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `questah-backup-${dayKey()}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setSaved(true);
+      return true;
+    } catch (e) { return false; }
+  };
+
+  const confirmar = () => {
+    if (txt.trim().toUpperCase() !== PALAVRA) return;
+    baixarBackup();                            // backup antes de zerar, sempre
+    setStep(0); setTxt(""); setSaved(false);
+    onReset();
+  };
+
+  if (step === 0) {
+    return (
+      <button onClick={() => setStep(1)} style={{ color: C.ember }} className="w-full py-2 text-xs font-bold">
+        Recomeçar aventura
+      </button>
+    );
+  }
+
+  return (
+    <Panel style={{ background: "#2a0e12", borderColor: C.ember }}>
+      <div style={{ color: C.ember }} className="font-serif text-lg font-black">⚠️ Recomeçar a aventura</div>
+      <p style={{ color: C.parch }} className="mt-1 text-sm">
+        Isto apaga <b>tudo</b> e não tem como desfazer: XP, nível, ouro, gemas, sequência de dias,
+        conquistas, chefes, o vínculo do seu monstrinho, missões, reinos, recompensas e registros de saúde.
+      </p>
+
+      {step === 1 && (
+        <>
+          <p style={{ color: C.parch2 }} className="mt-2 text-xs">
+            Antes de qualquer coisa, guarde uma cópia do seu progresso. Você pode baixá-la agora —
+            e ela também será baixada automaticamente na confirmação.
+          </p>
+          <button onClick={baixarBackup} style={{ background: C.gold, color: C.ink }}
+            className="mt-3 w-full rounded-xl py-2.5 text-sm font-bold active:scale-95 transition">
+            {saved ? "✅ Backup baixado — baixar de novo" : "⬇️ Baixar backup do meu progresso"}
+          </button>
+          <div className="mt-3 flex gap-2">
+            <button onClick={() => { setStep(0); setSaved(false); }} style={{ background: "rgba(255,255,255,.14)", color: C.parch }}
+              className="flex-1 rounded-xl py-2 text-sm font-bold active:scale-95 transition">Cancelar</button>
+            <button onClick={() => setStep(2)} style={{ background: "rgba(0,0,0,.35)", color: C.ember, border: `2px solid ${C.ember}` }}
+              className="flex-1 rounded-xl py-2 text-sm font-bold active:scale-95 transition">Quero continuar</button>
+          </div>
+        </>
+      )}
+
+      {step === 2 && (
+        <>
+          <p style={{ color: C.parch2 }} className="mt-2 text-xs">
+            Última etapa: digite <b style={{ color: C.ember }}>{PALAVRA}</b> para confirmar.
+          </p>
+          <input value={txt} onChange={(e) => setTxt(e.target.value)} placeholder={PALAVRA} autoCapitalize="characters"
+            style={{ borderColor: C.ember, color: C.ink }}
+            className="mt-2 w-full rounded-xl border-2 bg-white/80 px-3 py-2 text-center font-bold outline-none" />
+          <div className="mt-3 flex gap-2">
+            <button onClick={() => { setStep(0); setTxt(""); setSaved(false); }} style={{ background: "rgba(255,255,255,.14)", color: C.parch }}
+              className="flex-1 rounded-xl py-2 text-sm font-bold active:scale-95 transition">Cancelar</button>
+            <button onClick={confirmar} disabled={txt.trim().toUpperCase() !== PALAVRA}
+              style={{ background: txt.trim().toUpperCase() === PALAVRA ? C.ember : "rgba(255,255,255,.12)", color: txt.trim().toUpperCase() === PALAVRA ? "#fff" : C.parch2 }}
+              className="flex-1 rounded-xl py-2 text-sm font-bold active:scale-95 transition">Apagar tudo</button>
+          </div>
+        </>
+      )}
+    </Panel>
   );
 }
 
