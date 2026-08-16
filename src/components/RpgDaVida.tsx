@@ -1168,17 +1168,19 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
   const tasks = data.tasks || [];
   // Agrupamento dinâmico: segue a ordem escolhida pelo usuário. Categorias
   // desconhecidas caem num grupo de fallback em vez de quebrar a tela.
-  const byCat = new Map();
+  // ATENÇÃO: `Map` aqui é o ÍCONE do lucide-react (importado no topo), não o
+  // Map nativo — usar `new Map()` neste arquivo quebra em runtime. Agrupamos
+  // com um objeto simples de propósito.
+  const byCat = {};
   visibleTasks.forEach((t) => {
     const k = t.category || "outros";
-    if (!byCat.has(k)) byCat.set(k, []);
-    byCat.get(k).push(t);
+    (byCat[k] || (byCat[k] = [])).push(t);
   });
-  const known = sortedCategories(data).filter((c) => byCat.has(c.id));
-  const unknown = [...byCat.keys()].filter((k) => !getCategory(data, k));
+  const known = sortedCategories(data).filter((c) => byCat[c.id]);
+  const unknown = Object.keys(byCat).filter((k) => !getCategory(data, k));
   const groups = [
-    ...known.map((c) => ({ cat: c, list: byCat.get(c.id) })),
-    ...unknown.map((k) => ({ cat: catView(data, k), list: byCat.get(k) })),
+    ...known.map((c) => ({ cat: c, list: byCat[c.id] })),
+    ...unknown.map((k) => ({ cat: catView(data, k), list: byCat[k] })),
   ];
   const doneCount = allTasks.filter((t) => data.doneToday.includes(t.id)).length;
 
