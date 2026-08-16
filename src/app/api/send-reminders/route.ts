@@ -45,8 +45,8 @@ function isDue(times: string[], tz: string) {
 function messageFor(tz: string) {
   const { hh } = minutesNowInTz(tz);
   if (hh < 12) return { title: "🗡️ Missões da manhã", body: "Bom dia, herói! Abra o QuesTAH e comece o dia marcando suas missões." };
-  if (hh < 18) return { title: "☀️ Missões da tarde", body: "Pausa pra cuidar da rotina — e da glicose. Pequenos passos contam!" };
-  return { title: "🌙 Missões da noite", body: "Reta final do dia! Feche o que falta e tome os remédios da noite." };
+  if (hh < 18) return { title: "☀️ Missões da tarde", body: "Uma pausa pra cuidar da rotina. Pequenos passos contam!" };
+  return { title: "🌙 Missões da noite", body: "Reta final do dia! Feche o que ainda falta e encerre com calma." };
 }
 
 async function handle(req: Request) {

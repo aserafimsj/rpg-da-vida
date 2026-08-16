@@ -15,10 +15,10 @@ import {
 } from "lucide-react";
 
 /* ============================================================
-   RPG DA VIDA — Habit Tracker gamificado para mentes com TDAH
-   Single-file React app. Salvamento via window.storage (persiste
-   entre sessões). Estrutura de dados desenhada para migrar fácil
-   para Supabase: cada "tabela" é uma chave do objeto `data`.
+   QuesTAH — Habit Tracker gamificado para mentes com TDAH
+   Single-file React app. O save é um único JSON por usuário,
+   persistido na nuvem (Supabase, tabela `saves`) via lib/save.ts,
+   com debounce. Cada "tabela" do jogo é uma chave do objeto `data`.
    ============================================================ */
 
 /* ---------- Tema / cores (inline styles: o runtime não compila
@@ -40,6 +40,13 @@ const C = {
   panelLine: "rgba(58,42,24,0.18)",
 };
 
+/* ---------- Categorias ----------
+   As categorias são DADO (data.categories), não constante. `CATS` sobrevive
+   apenas como fonte da migração de saves antigos — nenhuma tela lê daqui.
+   Formato de cada categoria:
+   { id, nome, emoji, cor, ordem, ativa, sistema: 'pet' | 'saude' | null }
+   Categorias de sistema são renomeáveis/recoloríveis/reordenáveis, mas nunca
+   desativadas nem apagadas: elas alimentam o monstrinho e a aba Saúde.        */
 const CATS = {
   pet: { label: "Mona", emoji: "🐾", color: C.rose },
   casa: { label: "Casa", emoji: "🏠", color: C.sky },
@@ -47,6 +54,56 @@ const CATS = {
   trabalho: { label: "Trabalho", emoji: "💼", color: "#8a6bd1" },
   saude: { label: "Saúde", emoji: "💙", color: "#34b3a0" },
 };
+const LEGACY_CAT_ORDER = ["pet", "casa", "pessoal", "trabalho", "saude"];
+const CAT_SISTEMA = { pet: "pet", saude: "saude" };
+const MAX_ACTIVE_CATS = 8;
+
+/** Categorias de um save antigo: preserva exatamente o que o usuário já via. */
+function legacyCategories() {
+  return LEGACY_CAT_ORDER.map((id, i) => ({
+    id, nome: CATS[id].label, emoji: CATS[id].emoji, cor: CATS[id].color,
+    ordem: i, ativa: true, sistema: CAT_SISTEMA[id] || null,
+  }));
+}
+/** Categorias de um usuário novo: genéricas, sem referências pessoais. */
+function freshCategories() {
+  return [
+    { id: "pet", nome: "Pet", emoji: "🐾", cor: C.rose, ordem: 0, ativa: true, sistema: "pet" },
+    { id: "casa", nome: "Casa", emoji: "🏠", cor: C.sky, ordem: 1, ativa: true, sistema: null },
+    { id: "pessoal", nome: "Pessoal", emoji: "🌱", cor: C.gold, ordem: 2, ativa: true, sistema: null },
+    { id: "trabalho", nome: "Trabalho", emoji: "💼", cor: "#8a6bd1", ordem: 3, ativa: true, sistema: null },
+    { id: "saude", nome: "Saúde", emoji: "❤️", cor: "#34b3a0", ordem: 4, ativa: true, sistema: "saude" },
+  ];
+}
+
+/* ---------- Helpers de categoria (únicos pontos de leitura) ---------- */
+const CAT_FALLBACK = { nome: "Aventura", emoji: "⚔️", cor: C.gold, ordem: 999, ativa: true, sistema: null };
+function categoriesOf(data) {
+  return Array.isArray(data?.categories) ? data.categories : [];
+}
+/** Categoria crua, ou null se o id não existir. */
+function getCategory(data, id) {
+  return categoriesOf(data).find((c) => c.id === id) || null;
+}
+/** Sempre devolve algo renderizável — nunca quebra com id desconhecido. */
+function catView(data, id) {
+  return getCategory(data, id) || { ...CAT_FALLBACK, id: id || "outros" };
+}
+function sortedCategories(data) {
+  return [...categoriesOf(data)].sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0));
+}
+function activeCategories(data) {
+  return sortedCategories(data).filter((c) => c.ativa);
+}
+/** Id da categoria que carrega um comportamento especial ('pet' | 'saude'). */
+function systemCategoryId(data, sistema) {
+  return categoriesOf(data).find((c) => c.sistema === sistema)?.id || sistema;
+}
+/** Uma categoria inativa deixa de ser oferecida, mas nunca esconde o histórico. */
+function isCategoryOffered(data, id) {
+  const c = getCategory(data, id);
+  return c ? !!c.ativa : true; // id desconhecido: mostra, nunca some em silêncio
+}
 
 /* ---------- Ícones e cores das missões ---------- */
 const TASK_ICONS = [
@@ -60,27 +117,29 @@ const DEFAULT_TASK_ICON = {
   torneiras: "🚰", filtro: "🥤", luzes: "💡", janela: "🪟", geladeira: "❄️", lixo: "🗑️",
   chave: "🔑", carteira: "👛", celular: "📱",
 };
-const CAT_FALLBACK_ICON = { pet: "🐾", casa: "🏠", pessoal: "🎒", trabalho: "💼", saude: "💙" };
-function taskIcon(t) {
-  return t?.icon || DEFAULT_TASK_ICON[t?.key] || CAT_FALLBACK_ICON[t?.category] || "⚔️";
+function taskIcon(t, data) {
+  return t?.icon || DEFAULT_TASK_ICON[t?.key] || catView(data, t?.category).emoji || "⚔️";
 }
-function taskColor(t) {
-  return t?.color || CATS[t?.category]?.color || C.gold;
+function taskColor(t, data) {
+  return t?.color || catView(data, t?.category).cor || C.gold;
 }
 
-/* ---------- Tarefas iniciais ---------- */
+/* ---------- Tarefas iniciais (só para usuários novos) ----------
+   Textos genéricos de propósito: as missões de um save existente são dado
+   do usuário e nunca são reescritas por aqui. As `key` são preservadas
+   porque conquistas e contadores dependem delas.                            */
 const BASE_TASKS = [
-  { id: "t_comida", key: "comida_mona", name: "Colocar comida para a Mona", desc: "Encha o potinho", xp: 10, category: "pet", need: "hunger", icon: "🍖" },
-  { id: "t_agua", key: "agua_mona", name: "Tem água para a Mona", desc: "Água fresca no pote", xp: 5, category: "pet", need: "thirst", icon: "💧" },
-  { id: "t_areia", key: "areia", name: "Areia limpa", desc: "Caixa de areia em ordem", xp: 10, category: "pet", need: "hygiene", icon: "🧹" },
-  { id: "t_brincar", key: "brincar_mona", name: "Brincar com a Mona", desc: "Um tempinho de carinho e brincadeira", xp: 10, category: "pet", need: "fun", icon: "🧶" },
-  { id: "t_guarda", key: "guarda_roupa", name: "Mona fora do guarda-roupa", desc: "Confira antes de fechar", xp: 10, category: "pet", icon: "🐱" },
+  { id: "t_comida", key: "comida_mona", name: "Colocar comida para o pet", desc: "Encha o potinho", xp: 10, category: "pet", need: "hunger", icon: "🍖" },
+  { id: "t_agua", key: "agua_mona", name: "Água fresca para o pet", desc: "Troque a água do pote", xp: 5, category: "pet", need: "thirst", icon: "💧" },
+  { id: "t_areia", key: "areia", name: "Limpar o espaço do pet", desc: "Caixa de areia ou cantinho em ordem", xp: 10, category: "pet", need: "hygiene", icon: "🧹" },
+  { id: "t_brincar", key: "brincar_mona", name: "Brincar com o pet", desc: "Um tempinho de carinho e brincadeira", xp: 10, category: "pet", need: "fun", icon: "🧶" },
+  { id: "t_guarda", key: "guarda_roupa", name: "Pet em segurança", desc: "Confira os cantinhos antes de fechar", xp: 10, category: "pet", icon: "🐱" },
   { id: "t_torneira", key: "torneiras", name: "Torneiras fechadas", desc: "Cozinha e banheiro", xp: 5, category: "casa", icon: "🚰" },
   { id: "t_filtro", key: "filtro", name: "Filtro fechado", desc: "Sem desperdício", xp: 5, category: "casa", icon: "🥤" },
   { id: "t_luzes", key: "luzes", name: "Luzes desligadas", desc: "Economia ligada", xp: 5, category: "casa", icon: "💡" },
   { id: "t_janela", key: "janela", name: "Janela fechada", desc: "Casa segura", xp: 5, category: "casa", icon: "🪟" },
   { id: "t_geladeira", key: "geladeira", name: "Geladeira fechada", desc: "Porta bem encostada", xp: 5, category: "casa", icon: "❄️" },
-  { id: "t_lixo", key: "lixo", name: "Lixo para fora", desc: "Só ter, qui e sáb", xp: 15, category: "casa", days: [2, 4, 6], icon: "🗑️" },
+  { id: "t_lixo", key: "lixo", name: "Lixo para fora", desc: "Nos dias de coleta", xp: 15, category: "casa", icon: "🗑️" },
   { id: "t_chave", key: "chave", name: "Pegou a chave", desc: "Antes de sair", xp: 5, category: "pessoal", icon: "🔑" },
   { id: "t_carteira", key: "carteira", name: "Pegou a carteira", desc: "Antes de sair", xp: 5, category: "pessoal", icon: "👛" },
   { id: "t_celular", key: "celular", name: "Pegou o celular", desc: "Antes de sair", xp: 5, category: "pessoal", icon: "📱" },
@@ -125,7 +184,7 @@ const ACHIEVEMENTS = [
   { id: "streak30", name: "Chama Eterna", emoji: "🏆", desc: "Mantenha 30 dias seguidos", check: (s) => s.longestStreak >= 30 },
   { id: "tasks100", name: "Centurião", emoji: "💯", desc: "Conclua 100 tarefas", check: (s) => s.tasksCompleted >= 100 },
   { id: "xp1000", name: "Mil de XP", emoji: "✨", desc: "Acumule 1000 de XP", check: (s) => s.xpTotal >= 1000 },
-  { id: "mona_master", name: "Mestre da Mona", emoji: "🐱", desc: "Cuide da Mona 20 vezes", check: (s) => (s.catCounts.pet || 0) >= 20 },
+  { id: "mona_master", name: "Melhor Amigo", emoji: "🐱", desc: "Cuide do seu pet 20 vezes", check: (s) => (s.catCounts.pet || 0) >= 20 },
   { id: "fridge_guard", name: "Guardião da Geladeira", emoji: "🧊", desc: "Feche a geladeira 15 vezes", check: (s) => (s.taskCounts.geladeira || 0) >= 15 },
   { id: "med_supreme", name: "Remédios Supremo", emoji: "💊", desc: "Remédios completos por 30 dias", check: (s) => (s.medDaysTotal || 0) >= 30 },
 ];
@@ -248,10 +307,10 @@ function MonSprite({ type, stage, size = 150, alive = true }) {
 /* ---------- Mapa da jornada ---------- */
 const JOURNEY = [
   { name: "Vila do Caos", xp: 0, emoji: "🏚️" },
-  { name: "Aprendiz da Organização", xp: 300, emoji: "🧹" },
-  { name: "Guardião da Casa", xp: 900, emoji: "🛡️" },
+  { name: "Aprendiz da Ordem", xp: 300, emoji: "🧹" },
+  { name: "Guardião da Jornada", xp: 900, emoji: "🛡️" },
   { name: "Mestre da Rotina", xp: 2000, emoji: "⚔️" },
-  { name: "Lenda Doméstica", xp: 4000, emoji: "🏰" },
+  { name: "Lenda Viva", xp: 4000, emoji: "🏰" },
 ];
 
 /* ---------- Pet (genérico) ---------- */
@@ -262,58 +321,13 @@ const PET_STAGES = [
   { name: "Realeza da Casa", xp: 1500 },
   { name: "Companheiro Lendário", xp: 3500 },
 ];
-const PET_SPECIES = [
-  { id: "gato", label: "Gato", emoji: "🐱" },
-  { id: "cachorro", label: "Cão", emoji: "🐶" },
-  { id: "coelho", label: "Coelho", emoji: "🐰" },
-  { id: "urso", label: "Urso", emoji: "🐻" },
-];
-const PET_COLORS = ["#ffffff", "#f4c542", "#e2a16f", "#b97a56", "#8a8f99", "#3a3a44", "#f6a5c0", "#9ad0c2"];
-const DEFAULT_PET = { name: "Mona", species: "gato", color: "#ffffff" };
+const DEFAULT_PET = { name: "Monstrinho", species: "gato", color: "#ffffff" };
 
-/* ---------- Ilustrações (imagens reais) ---------- */
-const IMG_SPECIES = ["gato"]; // espécies com ilustração pronta (sem cor/SVG)
-const CAT_IMG = {
-  feliz: "/pets/feliz.png",
-  realeza: "/pets/realeza.png",
-  sono: "/pets/sono.png",
-  triste: "/pets/triste.png",
-  brava: "/pets/brava.png",
-};
-const CAT_STAGE_IMG = ["sono", "feliz", "feliz", "realeza", "realeza"]; // por fase (na evolução)
+/* ---------- Ilustrações do herói (imagens reais) ---------- */
 const AVATAR_IMG = { normal: "/avatar/normal.png", supremo: "/avatar/supremo.png" };
 const AVATAR_SUPREMO_LEVEL = 10;
-// Escolhe a imagem do gato pela energia (estilo Pou) e fase
-function catImageKey(energy, stageIndex) {
-  if (energy < 15) return "brava";
-  if (energy < 40) return "triste";
-  if (stageIndex >= 3) return "realeza";
-  if (energy < 70) return "sono";
-  return "feliz";
-}
-
-/* ---------- Avatar (camadas + desbloqueio por nível) ---------- */
-const SKIN_TONES = ["#f6d2b3", "#eebd96", "#d39b6e", "#a9714a", "#7a4f30", "#5a3825"];
-const HAIR_COLORS = ["#2b2118", "#5a3b22", "#a8662d", "#d6a64a", "#bcbcbc", "#e7e1d6", "#c0392b", "#3a6ea5"];
-const HAIRS = [
-  { id: "curto", label: "Curto", lvl: 1 },
-  { id: "longo", label: "Longo", lvl: 1 },
-  { id: "careca", label: "Careca", lvl: 1 },
-  { id: "cacheado", label: "Cacheado", lvl: 3 },
-  { id: "moicano", label: "Moicano", lvl: 6 },
-];
-const OUTFITS = [
-  { id: "camiseta", label: "Camiseta", lvl: 1, color: "#5aa9e6" },
-  { id: "tunica", label: "Túnica", lvl: 2, color: "#7ec850" },
-  { id: "armadura", label: "Armadura", lvl: 4, color: "#9aa3b2" },
-  { id: "capa", label: "Capa heroica", lvl: 8, color: "#9b59b6" },
-];
-const ACCESSORIES = [
-  { id: "nenhum", label: "Nenhum", lvl: 1 },
-  { id: "oculos", label: "Óculos", lvl: 2 },
-  { id: "chapeu", label: "Chapéu", lvl: 5 },
-  { id: "coroa", label: "Coroa", lvl: 10 },
-];
+// Config do avatar guardada no save. O construtor em camadas (cabelo, roupa,
+// acessórios) mora em legacy/avatar-builder.tsx — volta na Fase 5.
 const DEFAULT_AVATAR = { skin: "#eebd96", hair: "curto", hairColor: "#2b2118", outfit: "camiseta", accessory: "nenhum" };
 
 /* ---------- Cosméticos (comprados com gemas) ---------- */
@@ -355,7 +369,15 @@ const FUN_MSGS = {
   casa: ["Você derrotou o Monstro da Pia Aberta", "Geladeira protegida com sucesso", "O Caos recuou um passo"],
   pessoal: ["Herói preparado para a jornada", "Mente e corpo em sincronia", "Mais um passo na disciplina"],
   trabalho: ["Missão de trabalho concluída 💼", "Produtividade em alta, herói", "Mais uma pendência derrotada"],
-  saude: ["Glicemia sob controle, herói 💙", "Seu corpo agradece o cuidado", "Mais um passo pela sua saúde"],
+  saude: ["Seu corpo agradece o cuidado 💙", "Buff de vitalidade ativado", "Mais um passo pela sua saúde"],
+  // usado por qualquer categoria criada pelo usuário
+  generic: [
+    "O Caos recuou um passo",
+    "Mais uma missão riscada do pergaminho",
+    "Sua lenda ficou um pouco maior ✨",
+    "Golpe certeiro na procrastinação",
+    "Herói em movimento — continue assim",
+  ],
 };
 
 /* ---------- Curva de XP ---------- */
@@ -396,7 +418,8 @@ const DEFAULT_DATA = {
   doneToday: [],
   scoredToday: { date: dayKey(), ids: [] }, // anti-farm: o que já pontuou hoje
   lastResetDate: dayKey(),
-  tasks: null,   // semeado em freshData()/migração
+  tasks: null,      // semeado em freshData()/migração
+  categories: null, // semeado em freshData()/migração
   meds: [],      // remédios do usuário (manhã/noite)
   meals: null,   // refeições nomeadas (semeado)
   rewards: DEFAULT_REWARDS,
@@ -443,6 +466,7 @@ function freshData() {
     water: { date: dayKey(), count: 0 },
     waterScored: { date: dayKey(), cups: 0 },
     tasks: BASE_TASKS.map((t) => ({ ...t })),
+    categories: freshCategories(),
     meds: [],
     meals: MEAL_DEFAULTS.map((m) => ({ ...m })),
     pet: { ...DEFAULT_PET },
@@ -515,6 +539,10 @@ export default function RpgDaVida({ user, onSignOut }) {
 
       // ---- migração de saves antigos (preserva o progresso) ----
       if (loaded) {
+        // Categorias viram dado. Um save anterior à Fase 1 recebe exatamente as
+        // 5 categorias que ele já via (labels antigos inclusive), reusando as
+        // chaves como id — assim nenhuma missão precisa ser reescrita.
+        if (!Array.isArray(loaded.categories)) d.categories = legacyCategories();
         if (loaded.tasks === undefined || loaded.tasks === null) {
           d.tasks = [...BASE_TASKS.map((t) => ({ ...t })), ...((loaded.customTasks) || [])];
         }
@@ -541,7 +569,7 @@ export default function RpgDaVida({ user, onSignOut }) {
           d.tasks = d.tasks.map((t) => (needByKey[t.key] && !t.need ? { ...t, need: needByKey[t.key] } : t));
           if (!d.tasks.some((t) => t.key === "brincar_mona")) {
             const idx = d.tasks.findIndex((t) => t.key === "areia");
-            const brincar = { id: "t_brincar", key: "brincar_mona", name: "Brincar com a Mona", desc: "Um tempinho de carinho e brincadeira", xp: 10, category: "pet", need: "fun" };
+            const brincar = { id: "t_brincar", key: "brincar_mona", name: "Brincar com o pet", desc: "Um tempinho de carinho e brincadeira", xp: 10, category: "pet", need: "fun" };
             if (idx >= 0) d.tasks.splice(idx + 1, 0, brincar); else d.tasks.push(brincar);
           }
         }
@@ -549,6 +577,15 @@ export default function RpgDaVida({ user, onSignOut }) {
         if (typeof d.gameBest !== "number") d.gameBest = 0;
       }
       delete d.customTasks; delete d.customMeds;
+
+      // rede de segurança: o app nunca roda sem categorias, e as de sistema
+      // (pet/saude) são sempre ativas — elas sustentam o monstrinho e a Saúde.
+      if (!Array.isArray(d.categories) || !d.categories.length) d.categories = freshCategories();
+      d.categories = d.categories.map((c, i) => ({
+        ...c,
+        ordem: typeof c.ordem === "number" ? c.ordem : i,
+        ativa: c.sistema ? true : c.ativa !== false,
+      }));
 
       // reset diário
       const today = dayKey();
@@ -607,7 +644,7 @@ export default function RpgDaVida({ user, onSignOut }) {
   const allTasks = data.tasks || [];
   const { level, xpInLevel, xpForNext } = levelFromXp(data.xpTotal);
   const pct = Math.min(100, Math.round((xpInLevel / xpForNext) * 100));
-  const playerClass = getPlayerClass(data.catCounts, data.tasksCompleted, level);
+  const playerClass = getPlayerClass(data, level);
   const petStage = stageFor(PET_STAGES, data.xpTotal);
   const journeyStage = stageFor(JOURNEY, data.xpTotal);
   const petEnergy = currentEnergy(data);
@@ -660,13 +697,15 @@ export default function RpgDaVida({ user, onSignOut }) {
           bumpEnergy(d, ENERGY_RECOVER_TASK);
           d.hardPenaltyNote = null;
 
-          // Tamagotchi: cuidar da Mona real enche os medidores da Mona virtual
+          // Tamagotchi: cuidar do pet real enche os medidores do pet virtual.
+          // O vínculo com a categoria é por `sistema`, não por nome/id fixo.
+          const isPetTask = getCategory(d, task.category)?.sistema === "pet";
           settleTama(d);
           if (task.need) d.tama[task.need] = 100;
-          if (task.category === "pet") d.tama.fun = cl100(d.tama.fun + 12);
+          if (isPetTask) d.tama.fun = cl100(d.tama.fun + 12);
           if (d.tama.hunger > 20 && d.tama.thirst > 20 && d.tama.hygiene > 20) d.tama.sick = false;
           // vínculo (evolução por bom cuidado)
-          if (task.category === "pet") gainBond(d, 8);
+          if (isPetTask) gainBond(d, 8);
           if (task.need) gainBond(d, 6);
 
           // remédios do dia completos?
@@ -690,10 +729,10 @@ export default function RpgDaVida({ user, onSignOut }) {
             setTimeout(() => setLevelUpBanner(null), 2600);
           } else if (d.soundOn) sound.ding();
 
-          const color = (CATS[task.category] || CATS.pessoal).color;
+          const color = catView(d, task.category).cor;
           spawnPop(`+${task.xp} XP`, color);
           spawnParticles(color);
-          const arr = FUN_MSGS[task.category] || FUN_MSGS.pessoal;
+          const arr = FUN_MSGS[task.category] || FUN_MSGS.generic;
           showToast(arr[Math.floor(Math.random() * arr.length)]);
           if (newAch.unlocked.length) {
             const a = ACHIEVEMENTS.find((x) => x.id === newAch.unlocked[0]);
@@ -814,7 +853,8 @@ export default function RpgDaVida({ user, onSignOut }) {
             setLevelUpBanner(newLevel);
             setTimeout(() => setLevelUpBanner(null), 2600);
           } else if (d.soundOn) sound.ding();
-          spawnPop(`+${WATER_XP} XP`, CATS.saude.color); spawnParticles(CATS.saude.color);
+          const hColor = catView(d, systemCategoryId(d, "saude")).cor;
+          spawnPop(`+${WATER_XP} XP`, hColor); spawnParticles(hColor);
         }
       }
       return d;
@@ -822,7 +862,11 @@ export default function RpgDaVida({ user, onSignOut }) {
   };
 
   /* ---------- tarefas pendentes para Modo Foco / Rápida ---------- */
-  const todayTasks = allTasks.filter(isActiveToday);
+  // Missão de categoria desativada deixa de ser oferecida, mas continua visível
+  // no dia se já foi marcada — o histórico do usuário nunca some sem aviso.
+  const todayTasks = allTasks.filter(
+    (t) => isActiveToday(t) && (isCategoryOffered(data, t.category) || data.doneToday.includes(t.id))
+  );
   const visibleTasks = todayTasks.filter((t) => (quickOnly ? t.xp <= 5 : true));
   const pending = todayTasks.filter((t) => !data.doneToday.includes(t.id));
 
@@ -883,7 +927,7 @@ export default function RpgDaVida({ user, onSignOut }) {
 
       {/* MODO FOCO */}
       {focusMode && (
-        <FocusOverlay pending={pending} onClose={() => setFocusMode(false)} onDone={toggleTask} />
+        <FocusOverlay data={data} pending={pending} onClose={() => setFocusMode(false)} onDone={toggleTask} />
       )}
 
       {/* conteúdo */}
@@ -982,7 +1026,11 @@ function VillageMap({ go }) {
         ))}
         <button onClick={() => go("stats")} aria-label="Mestre"
           style={{ position: "absolute", left: "45%", top: "79%", width: "12%" }} className="active:scale-95 transition">
-          <img src="/mestre_azul.png" alt="Mestre" className="imgpx" style={{ width: "100%", filter: "drop-shadow(0 2px 3px rgba(0,0,0,.5))" }} />
+          {/* a arte do Mestre é opcional: se o arquivo não existir, some sem
+              quebrar o layout — o hotspot continua clicável */}
+          <img src="/mestre_azul.png" alt="Mestre" className="imgpx"
+            onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
+            style={{ width: "100%", filter: "drop-shadow(0 2px 3px rgba(0,0,0,.5))" }} />
         </button>
       </div>
       <div className="font-pixel mt-3 text-center" style={{ color: C.inkSoft, fontSize: 8 }}>Toque num predio pra entrar</div>
@@ -997,11 +1045,12 @@ const GB = {
 };
 const noac = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 const CAT_MSG = {
-  pet: ["Mona esta orgulhosa de voce!", "Voce cuidou bem da Mona!"],
+  pet: ["Seu bichinho esta orgulhoso!", "Voce cuidou bem do seu pet!"],
   casa: ["Monstro da Pia Aberta derrotado!", "Casa protegida com sucesso!", "Geladeira selada!"],
   pessoal: ["Item essencial garantido!", "Heroi preparado pra aventura!"],
   trabalho: ["Tarefa de trabalho concluida!", "Produtividade ativada!"],
   saude: ["Sua saude agradece!", "Buff de vida ativado!"],
+  generic: ["Missao concluida!", "O Caos recuou um passo!", "Sua lenda cresceu!"],
 };
 function GBBox({ children, style, className = "" }) {
   return (
@@ -1017,7 +1066,7 @@ function GameBoyHome({ data, level, xpInLevel, xpForNext, pct, playerClass, tama
     const already = isDone(t.id);
     toggleTask(t);
     if (!already) {
-      const pool = CAT_MSG[t.category] || ["Missao concluida!"];
+      const pool = CAT_MSG[t.category] || CAT_MSG.generic;
       setDialog({ title: `+${t.xp} XP   +${t.xp} OURO`, body: pool[Math.floor(Math.random() * pool.length)] });
     }
   };
@@ -1030,7 +1079,7 @@ function GameBoyHome({ data, level, xpInLevel, xpForNext, pct, playerClass, tama
 
       <GBBox className="mb-3">
         <div style={{ fontSize: 13, lineHeight: 1.4 }}>{noac(data.playerName || "HEROI").toUpperCase()}</div>
-        <div style={{ fontSize: 8, color: GB.dim }} className="mt-1">{noac(playerClass?.name || "AVENTUREIRO").toUpperCase()}</div>
+        <div style={{ fontSize: 8, color: GB.dim }} className="mt-1">{noac(playerClass || "AVENTUREIRO").toUpperCase()}</div>
         <div className="mt-3 flex items-center gap-2" style={{ fontSize: 10 }}>
           <span>Lv{level}</span>
           <div style={{ flex: 1, height: 12, border: `2px solid ${GB.ink}`, background: GB.screen }}>
@@ -1115,9 +1164,22 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
   const [adding, setAdding] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
+  const [showCats, setShowCats] = useState(false);
   const tasks = data.tasks || [];
-  const grouped = { pet: [], casa: [], pessoal: [], trabalho: [] };
-  visibleTasks.forEach((t) => { if (!grouped[t.category]) grouped[t.category] = []; grouped[t.category].push(t); });
+  // Agrupamento dinâmico: segue a ordem escolhida pelo usuário. Categorias
+  // desconhecidas caem num grupo de fallback em vez de quebrar a tela.
+  const byCat = new Map();
+  visibleTasks.forEach((t) => {
+    const k = t.category || "outros";
+    if (!byCat.has(k)) byCat.set(k, []);
+    byCat.get(k).push(t);
+  });
+  const known = sortedCategories(data).filter((c) => byCat.has(c.id));
+  const unknown = [...byCat.keys()].filter((k) => !getCategory(data, k));
+  const groups = [
+    ...known.map((c) => ({ cat: c, list: byCat.get(c.id) })),
+    ...unknown.map((k) => ({ cat: catView(data, k), list: byCat.get(k) })),
+  ];
   const doneCount = allTasks.filter((t) => data.doneToday.includes(t.id)).length;
 
   const saveTask = (task) => {
@@ -1214,36 +1276,43 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
         <span className="font-serif text-lg">Missões Diárias</span>
         <span className="flex items-center gap-3">
           <span style={{ color: C.gold }}>{doneCount}/{allTasks.length}</span>
-          <button onClick={() => { setEditMode((e) => !e); setEditingTask(null); setAdding(false); }}
+          <button onClick={() => { setShowCats((s) => !s); setEditMode(false); setEditingTask(null); setAdding(false); }}
+            style={{ color: showCats ? C.gold : C.parch2 }} className="flex items-center gap-1 text-xs font-bold">
+            ⚙️ Reinos
+          </button>
+          <button onClick={() => { setEditMode((e) => !e); setEditingTask(null); setAdding(false); setShowCats(false); }}
             style={{ color: editMode ? C.gold : C.parch2 }} className="flex items-center gap-1 text-xs font-bold">
             <Pencil size={14} /> {editMode ? "Pronto" : "Editar"}
           </button>
         </span>
       </div>
 
+      {showCats && <CategoryManager data={data} update={update} onClose={() => setShowCats(false)} />}
+
       {(adding || editingTask) && (
-        <TaskForm initial={editingTask} onCancel={() => { setAdding(false); setEditingTask(null); }} onSave={saveTask} />
+        <TaskForm data={data} initial={editingTask} onCancel={() => { setAdding(false); setEditingTask(null); }} onSave={saveTask} />
       )}
 
-      {Object.entries(grouped).map(([cat, list]) => list.length > 0 && (
-        <div key={cat} className="space-y-2">
+      {groups.map(({ cat, list }) => list.length > 0 && (
+        <div key={cat.id} className="space-y-2">
           <div className="flex items-center gap-2 px-1">
-            <span className="text-lg">{CATS[cat].emoji}</span>
-            <span style={{ color: C.parch }} className="font-serif font-bold">{CATS[cat].label}</span>
+            <span className="text-lg">{cat.emoji}</span>
+            <span style={{ color: C.parch }} className="font-serif font-bold">{cat.nome}</span>
+            {cat.ativa === false && <span style={{ color: C.parch2 }} className="text-[10px] font-bold">(inativa)</span>}
           </div>
           {list.map((t) => {
             const done = data.doneToday.includes(t.id);
             return (
               <div key={t.id} className="flex items-center gap-2">
                 <button onClick={() => (editMode ? setEditingTask(t) : toggleTask(t))}
-                  style={{ background: done ? "rgba(244,230,197,.45)" : C.parch, border: `3px solid ${done ? C.xpDeep : C.goldDeep}`, borderLeft: `7px solid ${taskColor(t)}`, boxShadow: done ? "none" : "0 4px 0 rgba(0,0,0,.2)" }}
+                  style={{ background: done ? "rgba(244,230,197,.45)" : C.parch, border: `3px solid ${done ? C.xpDeep : C.goldDeep}`, borderLeft: `7px solid ${taskColor(t, data)}`, boxShadow: done ? "none" : "0 4px 0 rgba(0,0,0,.2)" }}
                   className="flex flex-1 items-center gap-2.5 rounded-2xl p-3 text-left active:scale-[.98] transition">
                   <span style={{ background: done ? C.xp : "transparent", border: `2px solid ${done ? C.xpDeep : C.inkSoft}`, color: "#fff" }}
                     className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg">
                     {editMode ? <Pencil size={14} style={{ color: C.inkSoft }} /> : (done && <Check size={18} strokeWidth={3} />)}
                   </span>
-                  <span style={{ background: taskColor(t) + "2e", opacity: done && !editMode ? 0.5 : 1 }}
-                    className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-lg">{taskIcon(t)}</span>
+                  <span style={{ background: taskColor(t, data) + "2e", opacity: done && !editMode ? 0.5 : 1 }}
+                    className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-lg">{taskIcon(t, data)}</span>
                   <span className="min-w-0 flex-1">
                     <span style={{ color: C.ink, textDecoration: done && !editMode ? "line-through" : "none", opacity: done && !editMode ? 0.6 : 1 }}
                       className="block font-bold leading-tight">{t.name}</span>
@@ -1292,17 +1361,174 @@ function EditableName({ data, update }) {
   );
 }
 
-function TaskForm({ initial, onCancel, onSave }) {
+/* ---------- REINOS (gestão de categorias) ----------
+   O usuário define as áreas da própria vida. Categorias de sistema
+   (pet/saude) são editáveis e reordenáveis, mas nunca desativadas ou
+   apagadas — elas sustentam o monstrinho e a aba Saúde.                */
+function CategoryManager({ data, update, onClose }) {
+  const cats = sortedCategories(data);
+  const activeCount = cats.filter((c) => c.ativa).length;
+  const atLimit = activeCount >= MAX_ACTIVE_CATS;
+  const [editingId, setEditingId] = useState(null);
+  const [adding, setAdding] = useState(false);
+
+  /** Persiste a lista já renumerando `ordem` pela posição. */
+  const commit = (list) => update({ categories: list.map((c, i) => ({ ...c, ordem: i })) });
+
+  const move = (idx, dir) => {
+    const next = [...cats];
+    const j = idx + dir;
+    if (j < 0 || j >= next.length) return;
+    [next[idx], next[j]] = [next[j], next[idx]];
+    commit(next);
+  };
+  const saveCat = (cat) => {
+    const exists = cats.some((c) => c.id === cat.id);
+    commit(exists ? cats.map((c) => (c.id === cat.id ? { ...c, ...cat } : c)) : [...cats, cat]);
+    setEditingId(null); setAdding(false);
+  };
+  const toggleAtiva = (cat) => {
+    if (cat.sistema) return;                       // sistema nunca desativa
+    if (!cat.ativa && atLimit) return;             // respeita o teto ao reativar
+    commit(cats.map((c) => (c.id === cat.id ? { ...c, ativa: !c.ativa } : c)));
+  };
+
+  return (
+    <Panel style={{ background: `linear-gradient(160deg, ${C.parch}, ${C.parch2})` }}>
+      <div className="mb-1 flex items-center justify-between">
+        <div style={{ color: C.ink }} className="font-serif text-lg font-black">⚙️ Seus Reinos</div>
+        <button onClick={onClose} style={{ color: C.inkSoft }} className="p-1"><X size={18} /></button>
+      </div>
+      <p style={{ color: C.inkSoft }} className="mb-3 text-xs">
+        As áreas da sua vida. Renomeie, troque o emoji e a cor, reordene — o jogo se adapta a você.
+        <b> {activeCount}/{MAX_ACTIVE_CATS}</b> ativas.
+      </p>
+
+      <div className="space-y-2">
+        {cats.map((c, i) => (
+          <div key={c.id}>
+            <div className="flex items-center gap-2 rounded-2xl p-2"
+              style={{ background: "rgba(0,0,0,.04)", borderLeft: `6px solid ${c.cor}`, opacity: c.ativa ? 1 : 0.55 }}>
+              <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-lg"
+                style={{ background: c.cor + "33" }}>{c.emoji}</span>
+              <span className="min-w-0 flex-1">
+                <span style={{ color: C.ink }} className="block truncate font-bold leading-tight">{c.nome}</span>
+                <span style={{ color: C.inkSoft }} className="block text-[10px] font-bold">
+                  {c.sistema === "pet" ? "🐾 alimenta o monstrinho" : c.sistema === "saude" ? "💙 usada na aba Saúde" : c.ativa ? "ativa" : "inativa"}
+                </span>
+              </span>
+              <span className="flex flex-shrink-0 flex-col">
+                <button onClick={() => move(i, -1)} disabled={i === 0} style={{ color: i === 0 ? "rgba(0,0,0,.2)" : C.inkSoft }}
+                  className="px-1 text-xs leading-none active:scale-90" aria-label="Subir">▲</button>
+                <button onClick={() => move(i, 1)} disabled={i === cats.length - 1} style={{ color: i === cats.length - 1 ? "rgba(0,0,0,.2)" : C.inkSoft }}
+                  className="px-1 text-xs leading-none active:scale-90" aria-label="Descer">▼</button>
+              </span>
+              <button onClick={() => { setEditingId(editingId === c.id ? null : c.id); setAdding(false); }}
+                style={{ color: C.inkSoft }} className="p-1 active:scale-90"><Pencil size={15} /></button>
+              {!c.sistema && (
+                <button onClick={() => toggleAtiva(c)} disabled={!c.ativa && atLimit}
+                  style={{ background: c.ativa ? C.xpDeep : "rgba(0,0,0,.12)", color: c.ativa ? "#fff" : C.inkSoft, opacity: !c.ativa && atLimit ? 0.5 : 1 }}
+                  className="flex-shrink-0 rounded-lg px-2 py-1 text-[10px] font-bold active:scale-95">
+                  {c.ativa ? "Ativa" : "Ativar"}
+                </button>
+              )}
+            </div>
+            {editingId === c.id && (
+              <CategoryForm initial={c} onCancel={() => setEditingId(null)} onSave={saveCat} />
+            )}
+          </div>
+        ))}
+      </div>
+
+      {adding ? (
+        <CategoryForm onCancel={() => setAdding(false)} onSave={saveCat} />
+      ) : atLimit ? (
+        <div style={{ color: C.inkSoft, background: "rgba(0,0,0,.04)" }} className="mt-3 rounded-2xl px-3 py-2 text-xs">
+          Você já tem <b>{MAX_ACTIVE_CATS} reinos ativos</b> — o máximo para a lista do dia continuar leve.
+          Desative um que não esteja usando para abrir espaço. Nada é apagado. 💛
+        </div>
+      ) : (
+        <button onClick={() => { setAdding(true); setEditingId(null); }} style={{ borderColor: C.goldDeep, color: C.ink }}
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed py-2.5 text-sm font-bold active:scale-95 transition">
+          <Plus size={16} /> Criar reino
+        </button>
+      )}
+
+      <p style={{ color: C.inkSoft }} className="mt-3 text-[11px]">
+        Reinos não são apagados — desativar esconde da lista do dia, mas guarda todo o histórico e as estatísticas.
+      </p>
+    </Panel>
+  );
+}
+
+function CategoryForm({ initial, onCancel, onSave }) {
+  const [nome, setNome] = useState(initial?.nome || "");
+  const [emoji, setEmoji] = useState(initial?.emoji || "⚔️");
+  const [cor, setCor] = useState(initial?.cor || TASK_COLORS[5]);
+  const submit = () => {
+    const n = nome.trim();
+    if (!n) return;
+    onSave({
+      ...(initial || { ativa: true, sistema: null, ordem: 999 }),
+      id: initial?.id || "cat_" + Math.random().toString(36).slice(2),
+      nome: n, emoji: emoji.trim() || "⚔️", cor,
+    });
+  };
+  return (
+    <div className="mt-2 rounded-2xl p-3" style={{ background: "rgba(255,255,255,.55)", border: `2px solid ${C.goldDeep}` }}>
+      <div className="mb-2 flex items-center gap-2 rounded-xl p-2" style={{ background: "rgba(0,0,0,.04)", borderLeft: `6px solid ${cor}` }}>
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl text-lg" style={{ background: cor + "33" }}>{emoji}</span>
+        <span style={{ color: C.ink }} className="truncate font-bold">{nome.trim() || "Novo reino"}</span>
+      </div>
+
+      <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome do reino (ex.: Estudos)" maxLength={24}
+        style={{ borderColor: C.goldDeep, color: C.ink }} className="mb-2 w-full rounded-xl border-2 bg-white/70 px-3 py-2 outline-none" />
+
+      <div className="mb-1 flex items-center justify-between">
+        <span style={{ color: C.inkSoft }} className="text-xs font-bold">Emoji</span>
+        <input value={emoji} onChange={(e) => setEmoji(e.target.value.slice(0, 2))} maxLength={2} aria-label="Emoji personalizado"
+          style={{ borderColor: C.goldDeep, color: C.ink }} className="w-14 rounded-lg border-2 bg-white/70 px-2 py-1 text-center outline-none" />
+      </div>
+      <div className="mb-3 flex flex-wrap gap-1.5" style={{ maxHeight: 100, overflowY: "auto" }}>
+        {TASK_ICONS.map((ic) => (
+          <button key={ic} onClick={() => setEmoji(ic)}
+            style={{ background: emoji === ic ? cor + "44" : "rgba(0,0,0,.05)", border: emoji === ic ? `2px solid ${cor}` : "2px solid transparent" }}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-base active:scale-90 transition">{ic}</button>
+        ))}
+      </div>
+
+      <div style={{ color: C.inkSoft }} className="mb-1 text-xs font-bold">Cor</div>
+      <div className="mb-3 flex flex-wrap gap-2">
+        {TASK_COLORS.map((c) => (
+          <button key={c} onClick={() => setCor(c)} aria-label={`Cor ${c}`}
+            style={{ background: c, border: cor === c ? `3px solid ${C.ink}` : "2px solid rgba(0,0,0,.15)" }}
+            className="h-8 w-8 rounded-full active:scale-90 transition" />
+        ))}
+      </div>
+
+      <div className="flex gap-2">
+        <button onClick={onCancel} style={{ color: C.inkSoft }} className="flex-1 rounded-xl py-2 text-sm font-bold">Cancelar</button>
+        <button onClick={submit} style={{ background: C.xpDeep, color: "#fff" }} className="flex-1 rounded-xl py-2 text-sm font-bold">
+          {initial ? "Salvar" : "Criar"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TaskForm({ data, initial, onCancel, onSave }) {
+  // A aba Saúde tem lista própria (remédios e refeições), então a categoria de
+  // sistema 'saude' não é oferecida aqui — agora por `sistema`, não por id fixo.
+  const cats = activeCategories(data).filter((c) => c.sistema !== "saude");
   const [name, setName] = useState(initial?.name || "");
   const [desc, setDesc] = useState(initial?.desc || "");
   const [xp, setXp] = useState(initial?.xp || 10);
-  const [cat, setCat] = useState(initial?.category || "casa");
+  const [cat, setCat] = useState(initial?.category || cats[0]?.id || "casa");
   const [days, setDays] = useState(initial?.days || []);
-  const [icon, setIcon] = useState(initial ? taskIcon(initial) : "⚔️");
+  const [icon, setIcon] = useState(initial ? taskIcon(initial, data) : "⚔️");
   const [color, setColor] = useState(initial?.color || TASK_COLORS[2]);
   const WD = [["Dom", 0], ["Seg", 1], ["Ter", 2], ["Qua", 3], ["Qui", 4], ["Sex", 5], ["Sáb", 6]];
   const toggleDay = (n) => setDays((d) => (d.includes(n) ? d.filter((x) => x !== n) : [...d, n].sort((a, b) => a - b)));
-  const cats = Object.entries(CATS).filter(([k]) => k !== "saude");
   const submit = () => {
     if (!name.trim()) return;
     const t = { ...(initial || {}), id: initial?.id || "c_" + Math.random().toString(36).slice(2), name: name.trim(), desc: desc.trim(), xp, category: cat, icon, color };
@@ -1349,9 +1575,9 @@ function TaskForm({ initial, onCancel, onSave }) {
       </div>
 
       <div className="mb-2 grid grid-cols-2 gap-2">
-        {cats.map(([k, v]) => (
-          <button key={k} onClick={() => setCat(k)} style={{ background: cat === k ? v.color : "rgba(0,0,0,.06)", color: cat === k ? "#fff" : C.ink }}
-            className="rounded-xl py-2 text-sm font-bold">{v.emoji} {v.label}</button>
+        {cats.map((c) => (
+          <button key={c.id} onClick={() => setCat(c.id)} style={{ background: cat === c.id ? c.cor : "rgba(0,0,0,.06)", color: cat === c.id ? "#fff" : C.ink }}
+            className="truncate rounded-xl px-2 py-2 text-sm font-bold">{c.emoji} {c.nome}</button>
         ))}
       </div>
       <div className="mb-2 flex items-center gap-2">
@@ -1379,7 +1605,7 @@ function TaskForm({ initial, onCancel, onSave }) {
 }
 
 /* ---------- MODO FOCO ---------- */
-function FocusOverlay({ pending, onClose, onDone }) {
+function FocusOverlay({ data, pending, onClose, onDone }) {
   const [i, setI] = useState(0);
   const list = pending;
   const t = list[i];
@@ -1402,7 +1628,7 @@ function FocusOverlay({ pending, onClose, onDone }) {
       <button onClick={onClose} style={{ color: C.parch }} className="absolute right-5 top-5"><X size={28} /></button>
       <div style={{ color: C.gold }} className="text-sm font-bold uppercase tracking-widest">Foco · {i + 1} de {list.length}</div>
       <div className="my-6 flex h-28 w-28 items-center justify-center rounded-3xl text-6xl"
-        style={{ background: taskColor(t) + "33", border: `4px solid ${taskColor(t)}`, animation: "float 3s ease-in-out infinite" }}>{taskIcon(t)}</div>
+        style={{ background: taskColor(t, data) + "33", border: `4px solid ${taskColor(t, data)}`, animation: "float 3s ease-in-out infinite" }}>{taskIcon(t, data)}</div>
       <div style={{ color: C.parch }} className="font-serif text-3xl font-black leading-tight">{t.name}</div>
       <div style={{ color: C.parch2 }} className="mt-2">{t.desc}</div>
       <div style={{ color: C.gold }} className="mt-3 font-bold">Recompensa: +{t.xp} XP</div>
@@ -1586,107 +1812,7 @@ function AddRewardForm({ onAdd, onCancel }) {
   );
 }
 
-/* ---------- PET (genérico: espécie + cor) ---------- */
-function petEars(species, color) {
-  if (species === "cachorro") return (<>
-    <path d="M22 38 Q9 41 14 64 Q24 66 31 50 Z" fill={color} stroke="#00000022" strokeWidth="1" />
-    <path d="M78 38 Q91 41 86 64 Q76 66 69 50 Z" fill={color} stroke="#00000022" strokeWidth="1" />
-  </>);
-  if (species === "coelho") return (<>
-    <ellipse cx="37" cy="20" rx="7" ry="20" fill={color} stroke="#00000022" strokeWidth="1" />
-    <ellipse cx="63" cy="20" rx="7" ry="20" fill={color} stroke="#00000022" strokeWidth="1" />
-    <ellipse cx="37" cy="22" rx="3" ry="13" fill="#f7c6d9" />
-    <ellipse cx="63" cy="22" rx="3" ry="13" fill="#f7c6d9" />
-  </>);
-  if (species === "urso") return (<>
-    <circle cx="26" cy="30" r="11" fill={color} stroke="#00000022" strokeWidth="1" />
-    <circle cx="74" cy="30" r="11" fill={color} stroke="#00000022" strokeWidth="1" />
-  </>);
-  // gato
-  return (<>
-    <path d="M20 42 L26 12 L46 34 Z" fill={color} stroke="#00000022" strokeWidth="1" />
-    <path d="M80 42 L74 12 L54 34 Z" fill={color} stroke="#00000022" strokeWidth="1" />
-    <path d="M27 38 L30 21 L40 33 Z" fill="#f7c6d9" />
-    <path d="M73 38 L70 21 L60 33 Z" fill="#f7c6d9" />
-  </>);
-}
-
-function PetAvatar({ size = 120, species = "gato", color = "#ffffff", sad = false, stageIndex = 0, idle = true, hat = null, glasses = null }) {
-  const sleepy = stageIndex === 0 && !sad;
-  const crown = stageIndex >= 3;
-  const sparkles = stageIndex >= 4;
-  return (
-    <svg width={size} height={size} viewBox="0 0 100 100"
-      style={{ animation: idle && !sad ? "float 3s ease-in-out infinite" : "none", overflow: "visible" }}>
-      {sparkles && [[10, 16], [88, 22], [82, 72], [14, 74]].map(([x, y], i) => (
-        <path key={i} style={{ animation: "wiggle 1.6s ease-in-out infinite" }}
-          d={`M${x} ${y - 4} L${x + 1.4} ${y - 1.4} L${x + 4} ${y} L${x + 1.4} ${y + 1.4} L${x} ${y + 4} L${x - 1.4} ${y + 1.4} L${x - 4} ${y} L${x - 1.4} ${y - 1.4} Z`}
-          fill={C.gold} />
-      ))}
-      {petEars(species, color)}
-      <ellipse cx="50" cy="60" rx="34" ry="30" fill={color} stroke="#00000022" strokeWidth="1.5" />
-      {crown && <path d="M34 30 L40 20 L46 28 L50 16 L54 28 L60 20 L66 30 Z" fill={C.gold} stroke={C.goldDeep} strokeWidth="1.2" />}
-      <ellipse cx="27" cy="67" rx="6" ry="4" fill="#ff7aa820" />
-      <ellipse cx="73" cy="67" rx="6" ry="4" fill="#ff7aa820" />
-      {sleepy ? (
-        <>
-          <path d="M30 57 Q38 63 46 57" fill="none" stroke="#3a4a66" strokeWidth="2.5" strokeLinecap="round" />
-          <path d="M54 57 Q62 63 70 57" fill="none" stroke="#3a4a66" strokeWidth="2.5" strokeLinecap="round" />
-          <text x="72" y="38" fontSize="12" fill="#5aa9e6">z</text>
-        </>
-      ) : (
-        <>
-          {sad && <>
-            <path d="M30 47 Q38 49 44 52" stroke="#3a4a66" strokeWidth="2" fill="none" strokeLinecap="round" />
-            <path d="M70 47 Q62 49 56 52" stroke="#3a4a66" strokeWidth="2" fill="none" strokeLinecap="round" />
-          </>}
-          <circle cx="38" cy="58" r="8" fill="#ffffffcc" />
-          <circle cx="62" cy="58" r="8" fill="#ffffffcc" />
-          <circle cx="38" cy="58" r="6" fill="#3a8fd8" />
-          <circle cx="62" cy="58" r="6" fill="#3a8fd8" />
-          <circle cx="38" cy="58" r="3" fill="#16263b" />
-          <circle cx="62" cy="58" r="3" fill="#16263b" />
-          <circle cx="40" cy="56" r="1.6" fill="#fff" />
-          <circle cx="64" cy="56" r="1.6" fill="#fff" />
-          {sad && <path d="M35 65 Q33 71 37 73 Q41 71 39 65 Z" fill="#7ec8ff" />}
-        </>
-      )}
-      <path d="M47 67 L53 67 L50 71 Z" fill="#f08fb0" />
-      {sad ? (
-        <path d="M42 80 Q50 74 58 80" fill="none" stroke="#c9a9a9" strokeWidth="2" strokeLinecap="round" />
-      ) : (
-        <path d="M50 71 Q46 78 41 76 M50 71 Q54 78 59 76" fill="none" stroke="#c9a9a9" strokeWidth="2" strokeLinecap="round" />
-      )}
-      {species === "gato" && (
-        <g stroke="#9aa0ab" strokeWidth="1.4" strokeLinecap="round">
-          <line x1="13" y1="61" x2="30" y2="63" /><line x1="13" y1="68" x2="30" y2="68" />
-          <line x1="87" y1="61" x2="70" y2="63" /><line x1="87" y1="68" x2="70" y2="68" />
-        </g>
-      )}
-      {glasses && <text x="50" y="63" fontSize="22" textAnchor="middle">{glasses}</text>}
-      {hat && <text x="50" y="25" fontSize="30" textAnchor="middle">{hat}</text>}
-    </svg>
-  );
-}
-
-function PetDisplay({ data, energy = 100, stageIndex = 0, size = 150, imgKeyOverride = null }) {
-  const pet = data.pet || DEFAULT_PET;
-  const hat = cosmeticEmoji(data, "petHat");
-  const glasses = cosmeticEmoji(data, "petGlasses");
-  if (IMG_SPECIES.includes(pet.species)) {
-    const key = imgKeyOverride || catImageKey(energy, stageIndex);
-    return (
-      <div style={{ position: "relative", width: size, height: size }}>
-        <img src={CAT_IMG[key]} alt={pet.name}
-          style={{ width: size, height: size, objectFit: "contain", animation: energy >= 40 ? "float 3s ease-in-out infinite" : "none" }} />
-        {glasses && <span style={{ position: "absolute", top: size * 0.4, left: "50%", transform: "translateX(-50%)", fontSize: size * 0.16 }}>{glasses}</span>}
-        {hat && <span style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", fontSize: size * 0.26 }}>{hat}</span>}
-      </div>
-    );
-  }
-  return <PetAvatar size={size} species={pet.species} color={pet.color} sad={energy < 40} stageIndex={stageIndex} hat={hat} glasses={glasses} />;
-}
-
+/* ---------- PET / MONSTRINHO ---------- */
 function Pet({ data, tama, tamaCare, pickStarter, update }) {
   const pet = data.pet || DEFAULT_PET;
   const setPet = (patch) => update({ pet: { ...pet, ...patch } });
@@ -1727,10 +1853,13 @@ function Pet({ data, tama, tamaCare, pickStarter, update }) {
   const ageDays = Math.max(0, Math.floor((Date.now() - new Date(t.startedAt || Date.now()).getTime()) / 86400000));
   const evoPct = t.stage < MON_MAX_STAGE ? Math.min(100, Math.round((t.bond / MON_EVO[t.stage]) * 100)) : 100;
 
+  // Os lembretes citam o nome que o usuário deu à categoria de cuidado —
+  // nunca um nome fixo.
+  const careName = catView(data, systemCategoryId(data, "pet")).nome;
   const METERS = [
-    { key: "hunger", label: "Fome", emoji: "🍖", color: "#e8843a", nudge: "Hora de pôr comida pra Mona de verdade 🍖" },
-    { key: "thirst", label: "Água", emoji: "💧", color: "#3a8fd8", nudge: "Troca a aguinha da Mona 💧" },
-    { key: "hygiene", label: "Higiene", emoji: "🧹", color: "#2a8c4a", nudge: "A caixa de areia pede limpeza 🧹" },
+    { key: "hunger", label: "Fome", emoji: "🍖", color: "#e8843a", nudge: `Hora de pôr comida de verdade — ${careName} 🍖` },
+    { key: "thirst", label: "Água", emoji: "💧", color: "#3a8fd8", nudge: `Troque a aguinha — ${careName} 💧` },
+    { key: "hygiene", label: "Higiene", emoji: "🧹", color: "#2a8c4a", nudge: `O espaço pede uma limpeza — ${careName} 🧹` },
     { key: "fun", label: "Felicidade", emoji: "🧶", color: C.rose, nudge: "Ele quer brincar — dá uma atenção 🧶" },
   ];
   const lows = METERS.filter((m) => t[m.key] < 35).sort((a, b) => t[a.key] - t[b.key]);
@@ -1817,11 +1946,11 @@ function Pet({ data, tama, tamaCare, pickStarter, update }) {
         </div>
       </Panel>
 
-      {/* lembrete de cuidar da Mona REAL */}
+      {/* lembrete de cuidar do pet REAL */}
       {(lows.length > 0 || t.sick) && (
         <Panel style={{ background: "#fff7e6", borderColor: C.ember }}>
           <div style={{ color: C.ink }} className="text-sm">
-            <b>{pet.name} te chama 🐾</b> — cuidar dele aqui lembra de cuidar da Mona de verdade:
+            <b>{pet.name} te chama 🐾</b> — cuidar dele aqui lembra de cuidar de {careName} na vida real:
             <ul className="mt-1 list-disc pl-5">
               {t.sick && <li>Ele não está bem. Remédio e cuidado ajudam a recuperar. 💛</li>}
               {lows.slice(0, 3).map((m) => <li key={m.key}>{m.nudge}</li>)}
@@ -1862,55 +1991,14 @@ function Pet({ data, tama, tamaCare, pickStarter, update }) {
           </div>
         )}
         <p style={{ color: C.inkSoft }} className="mt-3 text-xs">
-          As missões de <b>comida, água, areia e brincar</b> (com a Mona real) enchem os medidores e fortalecem o <b>vínculo</b>, que faz o {pet.name} evoluir. Ele fica triste/doente, mas <b>nunca</b> morre. 💛
+          As missões de <b>cuidado</b> (comida, água, higiene e diversão) enchem os medidores e fortalecem o <b>vínculo</b>, que faz o {pet.name} evoluir. Ele fica triste/doente, mas <b>nunca</b> morre. 💛
         </p>
       </Panel>
     </div>
   );
 }
 
-/* ---------- AVATAR (camadas + desbloqueio por nível) ---------- */
-function hairEl(hair, color) {
-  if (hair === "curto") return <path d="M28 44 Q30 23 50 23 Q70 23 72 44 Q66 33 50 33 Q34 33 28 44 Z" fill={color} />;
-  if (hair === "longo") return <><path d="M25 64 Q23 29 50 23 Q77 29 75 64 L69 64 Q72 36 50 34 Q28 36 31 64 Z" fill={color} /><path d="M28 44 Q34 29 50 29 Q66 29 72 44 Q66 33 50 33 Q34 33 28 44 Z" fill={color} /></>;
-  if (hair === "cacheado") return <g fill={color}>{[[34, 30], [42, 25], [50, 23], [58, 25], [66, 30], [30, 40], [70, 40]].map(([x, y], i) => <circle key={i} cx={x} cy={y} r="7" />)}</g>;
-  if (hair === "moicano") return <path d="M46 21 Q50 6 54 21 L54 40 L46 40 Z" fill={color} />;
-  return null; // careca
-}
-
-function AvatarFig({ cfg, level = 1, size = 150, hat = null, aura = null }) {
-  const skin = cfg?.skin || DEFAULT_AVATAR.skin;
-  const hair = cfg?.hair || "curto";
-  const hairColor = cfg?.hairColor || "#2b2118";
-  const outfit = OUTFITS.find((o) => o.id === cfg?.outfit) || OUTFITS[0];
-  const acc = cfg?.accessory || "nenhum";
-  const happy = level >= 5;
-  const auraRing = level >= 10;
-  return (
-    <svg width={size} height={size * 1.2} viewBox="0 0 100 120" style={{ overflow: "visible" }}>
-      {aura && <text x="50" y="62" fontSize="64" textAnchor="middle" opacity="0.22">{aura}</text>}
-      {auraRing && <circle cx="50" cy="46" r="42" fill="none" stroke={C.gold} strokeWidth="2" opacity="0.5" style={{ animation: "wiggle 3s ease-in-out infinite" }} />}
-      {cfg?.outfit === "capa" && <path d="M30 72 Q50 66 70 72 L80 118 Q50 112 20 118 Z" fill="#7d3ca6" />}
-      <path d="M26 118 Q26 80 50 78 Q74 80 74 118 Z" fill={outfit.color} stroke="#00000022" strokeWidth="1" />
-      {outfit.id === "armadura" && (<>
-        <line x1="50" y1="80" x2="50" y2="118" stroke="#00000022" strokeWidth="2" />
-        <path d="M40 88 Q50 94 60 88" stroke="#ffffff66" strokeWidth="2" fill="none" />
-      </>)}
-      <rect x="44" y="63" width="12" height="15" rx="4" fill={skin} />
-      <circle cx="50" cy="46" r="22" fill={skin} stroke="#00000022" strokeWidth="1" />
-      <circle cx="28" cy="48" r="4" fill={skin} /><circle cx="72" cy="48" r="4" fill={skin} />
-      {hairEl(hair, hairColor)}
-      <circle cx="42" cy="46" r="2.5" fill="#26201a" /><circle cx="58" cy="46" r="2.5" fill="#26201a" />
-      <path d={happy ? "M40 54 Q50 64 60 54" : "M43 55 Q50 60 57 55"} fill="none" stroke="#9a6a5a" strokeWidth="2" strokeLinecap="round" />
-      <circle cx="36" cy="53" r="3" fill="#ff5a5a22" /><circle cx="64" cy="53" r="3" fill="#ff5a5a22" />
-      {acc === "oculos" && <g stroke="#26201a" strokeWidth="2" fill="none"><circle cx="42" cy="46" r="6" /><circle cx="58" cy="46" r="6" /><line x1="48" y1="46" x2="52" y2="46" /></g>}
-      {acc === "chapeu" && <g><rect x="30" y="25" width="40" height="6" rx="3" fill="#5a3b22" /><rect x="38" y="12" width="24" height="16" rx="4" fill="#7a4f30" /></g>}
-      {acc === "coroa" && <path d="M34 26 L40 13 L46 23 L50 9 L54 23 L60 13 L66 26 Z" fill={C.gold} stroke={C.goldDeep} strokeWidth="1" />}
-      {hat && <text x="50" y="24" fontSize="26" textAnchor="middle">{hat}</text>}
-    </svg>
-  );
-}
-
+/* ---------- AVATAR (ilustração + desbloqueio por nível) ---------- */
 function Avatar({ data, level, journeyStage, petEnergy = 100, update }) {
   const mood = energyMood(petEnergy);
   const supremo = level >= AVATAR_SUPREMO_LEVEL;
@@ -2193,8 +2281,9 @@ function Saude({ data, addWater, toggleTask, update, medDone }) {
   if (meals.length) fracs.push(mealsDone / meals.length);
   const vit = Math.round((fracs.reduce((a, b) => a + b, 0) / fracs.length) * 100);
 
+  const healthCat = systemCategoryId(data, "saude");
   const addMed = (period, m) => {
-    update({ meds: [...meds, { id: "m_" + Math.random().toString(36).slice(2), name: m.name, desc: m.dose, xp: m.xp, category: "saude", period, med: true }] });
+    update({ meds: [...meds, { id: "m_" + Math.random().toString(36).slice(2), name: m.name, desc: m.dose, xp: m.xp, category: healthCat, period, med: true }] });
     setAddP(null);
   };
   const removeMed = (id) => update({ meds: meds.filter((m) => m.id !== id), doneToday: data.doneToday.filter((x) => x !== id) });
@@ -2250,7 +2339,7 @@ function Saude({ data, addWater, toggleTask, update, medDone }) {
       {/* refeições nomeadas */}
       <div style={{ color: C.parch }} className="flex items-center gap-2 px-1 font-serif text-lg font-bold"><Utensils size={20} /> Refeições</div>
       {meals.map((m) => (
-        <HealthRow key={m.id} t={m} icon={Utensils} done={data.doneToday.includes(m.id)} onToggle={() => toggleTask({ ...m, category: "saude" })} onDelete={editHealth ? () => removeMeal(m.id) : undefined} />
+        <HealthRow key={m.id} t={m} icon={Utensils} done={data.doneToday.includes(m.id)} onToggle={() => toggleTask({ ...m, category: healthCat })} onDelete={editHealth ? () => removeMeal(m.id) : undefined} />
       ))}
       {addingMeal ? <MealForm onCancel={() => setAddingMeal(false)} onAdd={addMeal} /> : (
         <button onClick={() => setAddingMeal(true)} style={{ borderColor: "#e08a3c", color: C.parch }}
@@ -2318,8 +2407,9 @@ function BossList({ data }) {
 
 /* ---------- STATS + CONQUISTAS + AJUSTES ---------- */
 function Stats({ data, level, playerClass, sound, update, onSignOut, user }) {
-  const fav = Object.entries(data.catCounts).sort((a, b) => b[1] - a[1])[0];
-  const favLabel = fav && fav[1] > 0 ? `${CATS[fav[0]].emoji} ${CATS[fav[0]].label}` : "—";
+  const fav = Object.entries(data.catCounts || {}).sort((a, b) => b[1] - a[1])[0];
+  const favCat = fav ? catView(data, fav[0]) : null;
+  const favLabel = fav && fav[1] > 0 ? `${favCat.emoji} ${favCat.nome}` : "—";
   const hours = ((data.tasksCompleted * 3) / 60).toFixed(1);
   const unlocked = data.achievements || [];
   const cells = [
@@ -2412,14 +2502,97 @@ function Stats({ data, level, playerClass, sound, update, onSignOut, user }) {
 
       <AccountPanel user={user} />
 
-      <button onClick={() => { if (confirm("Recomeçar a aventura do zero? Tudo será apagado.")) { update(freshData()); } }}
-        style={{ color: C.ember }} className="w-full py-2 text-xs font-bold">Recomeçar aventura</button>
+      <ResetAdventure data={data} onReset={() => update(freshData())} />
 
       <button onClick={onSignOut} style={{ color: C.parch }}
         className="flex w-full items-center justify-center gap-2 py-2 text-sm font-bold opacity-80">
         <LogOut size={16} /> Sair da conta
       </button>
     </div>
+  );
+}
+
+/* ---------- Recomeçar aventura (destrutivo: 2 etapas + backup) ---------- */
+function ResetAdventure({ data, onReset }) {
+  const [step, setStep] = useState(0);        // 0 fechado · 1 explicação · 2 confirmação escrita
+  const [txt, setTxt] = useState("");
+  const [saved, setSaved] = useState(false);
+  const PALAVRA = "RECOMEÇAR";
+
+  const baixarBackup = () => {
+    try {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `questah-backup-${dayKey()}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setSaved(true);
+      return true;
+    } catch (e) { return false; }
+  };
+
+  const confirmar = () => {
+    if (txt.trim().toUpperCase() !== PALAVRA) return;
+    baixarBackup();                            // backup antes de zerar, sempre
+    setStep(0); setTxt(""); setSaved(false);
+    onReset();
+  };
+
+  if (step === 0) {
+    return (
+      <button onClick={() => setStep(1)} style={{ color: C.ember }} className="w-full py-2 text-xs font-bold">
+        Recomeçar aventura
+      </button>
+    );
+  }
+
+  return (
+    <Panel style={{ background: "#2a0e12", borderColor: C.ember }}>
+      <div style={{ color: C.ember }} className="font-serif text-lg font-black">⚠️ Recomeçar a aventura</div>
+      <p style={{ color: C.parch }} className="mt-1 text-sm">
+        Isto apaga <b>tudo</b> e não tem como desfazer: XP, nível, ouro, gemas, sequência de dias,
+        conquistas, chefes, o vínculo do seu monstrinho, missões, reinos, recompensas e registros de saúde.
+      </p>
+
+      {step === 1 && (
+        <>
+          <p style={{ color: C.parch2 }} className="mt-2 text-xs">
+            Antes de qualquer coisa, guarde uma cópia do seu progresso. Você pode baixá-la agora —
+            e ela também será baixada automaticamente na confirmação.
+          </p>
+          <button onClick={baixarBackup} style={{ background: C.gold, color: C.ink }}
+            className="mt-3 w-full rounded-xl py-2.5 text-sm font-bold active:scale-95 transition">
+            {saved ? "✅ Backup baixado — baixar de novo" : "⬇️ Baixar backup do meu progresso"}
+          </button>
+          <div className="mt-3 flex gap-2">
+            <button onClick={() => { setStep(0); setSaved(false); }} style={{ background: "rgba(255,255,255,.14)", color: C.parch }}
+              className="flex-1 rounded-xl py-2 text-sm font-bold active:scale-95 transition">Cancelar</button>
+            <button onClick={() => setStep(2)} style={{ background: "rgba(0,0,0,.35)", color: C.ember, border: `2px solid ${C.ember}` }}
+              className="flex-1 rounded-xl py-2 text-sm font-bold active:scale-95 transition">Quero continuar</button>
+          </div>
+        </>
+      )}
+
+      {step === 2 && (
+        <>
+          <p style={{ color: C.parch2 }} className="mt-2 text-xs">
+            Última etapa: digite <b style={{ color: C.ember }}>{PALAVRA}</b> para confirmar.
+          </p>
+          <input value={txt} onChange={(e) => setTxt(e.target.value)} placeholder={PALAVRA} autoCapitalize="characters"
+            style={{ borderColor: C.ember, color: C.ink }}
+            className="mt-2 w-full rounded-xl border-2 bg-white/80 px-3 py-2 text-center font-bold outline-none" />
+          <div className="mt-3 flex gap-2">
+            <button onClick={() => { setStep(0); setTxt(""); setSaved(false); }} style={{ background: "rgba(255,255,255,.14)", color: C.parch }}
+              className="flex-1 rounded-xl py-2 text-sm font-bold active:scale-95 transition">Cancelar</button>
+            <button onClick={confirmar} disabled={txt.trim().toUpperCase() !== PALAVRA}
+              style={{ background: txt.trim().toUpperCase() === PALAVRA ? C.ember : "rgba(255,255,255,.12)", color: txt.trim().toUpperCase() === PALAVRA ? "#fff" : C.parch2 }}
+              className="flex-1 rounded-xl py-2 text-sm font-bold active:scale-95 transition">Apagar tudo</button>
+          </div>
+        </>
+      )}
+    </Panel>
   );
 }
 
@@ -2593,13 +2766,20 @@ function stageFor(stages, xp) {
   for (const st of stages) if (xp >= st.xp) s = st;
   return s;
 }
-function getPlayerClass(counts, total, level) {
+/** Classe genérica, calculada sobre as categorias do próprio usuário.
+ *  (Classes por atributo entram na Fase 4.) */
+function getPlayerClass(data, level) {
+  const counts = data?.catCounts || {};
+  const total = data?.tasksCompleted || 0;
   if (total < 8) return "Aventureiro Novato";
-  const { pet = 0, casa = 0, pessoal = 0, trabalho = 0, saude = 0 } = counts;
-  const max = Math.max(pet, casa, pessoal, trabalho, saude), min = Math.min(pet, casa, pessoal, trabalho, saude);
+  const entries = categoriesOf(data).map((c) => [c.id, counts[c.id] || 0]);
+  if (!entries.length) return "Aventureiro";
+  const values = entries.map((e) => e[1]);
+  const max = Math.max(...values), min = Math.min(...values);
   if (total >= 60 && max - min <= total * 0.3) return "Herói Lendário";
-  const top = [["casa", casa], ["pessoal", pessoal], ["pet", pet], ["trabalho", trabalho], ["saude", saude]].sort((a, b) => b[1] - a[1])[0][0];
-  return { casa: "Guardião da Casa", pessoal: "Monge da Disciplina", pet: "Guardião dos Bichos", trabalho: "Mestre do Trabalho", saude: "Guardião da Saúde" }[top];
+  const top = [...entries].sort((a, b) => b[1] - a[1])[0];
+  if (!top || top[1] <= 0) return "Aventureiro";
+  return `Guardião de ${catView(data, top[0]).nome}`;
 }
 function checkAchievements(d, level) {
   const snap = { tasksCompleted: d.tasksCompleted, level: levelFromXp(d.xpTotal).level, xpTotal: d.xpTotal, longestStreak: d.longestStreak, catCounts: d.catCounts, taskCounts: d.taskCounts, medDaysTotal: d.medDaysTotal };
