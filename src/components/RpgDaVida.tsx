@@ -1731,14 +1731,16 @@ function MissionCard({ t, data, editMode, aberta, onAbrir, toggleTask, toggleEta
                   opacity: f ? 0.45 : 1,
                 }}
                 className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left active:scale-[.98] transition">
-                <span style={{ background: f ? C.xp : "transparent", border: `2px solid ${f ? C.xpDeep : C.parch2}`, color: "#fff" }}
+                {/* a linha do passo atual tem fundo claro, então tudo nela
+                    precisa de tinta escura — senão o nome some no fundo */}
+                <span style={{ background: f ? C.xp : "transparent", border: `2px solid ${f ? C.xpDeep : (ehProxima ? C.inkSoft : C.parch2)}`, color: "#fff" }}
                   className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded">
                   {f && <Check size={12} strokeWidth={3} />}
                 </span>
                 {ehProxima && <span className="text-xs">🎯</span>}
-                <span style={{ color: f ? C.parch2 : C.parch, textDecoration: f ? "line-through" : "none" }}
+                <span style={{ color: ehProxima ? C.ink : (f ? C.parch2 : C.parch), textDecoration: f ? "line-through" : "none" }}
                   className="min-w-0 flex-1 truncate text-sm font-bold">{e.nome}</span>
-                <span style={{ color: C.gold }} className="flex-shrink-0 text-[10px] font-bold">+{e.xp}</span>
+                <span style={{ color: ehProxima ? C.xpDeep : C.gold }} className="flex-shrink-0 text-[10px] font-bold">+{e.xp}</span>
               </button>
             );
           })}
