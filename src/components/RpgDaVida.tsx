@@ -176,8 +176,52 @@ function normalizeTask(t) {
   const out = { ...t };
   if (!DIFICULDADES.some((x) => x.id === out.dificuldade)) out.dificuldade = dificuldadeFromXp(out.xp);
   if (!out.recorrencia || !out.recorrencia.tipo) out.recorrencia = recorrenciaOf(t);
+  // etapas são opcionais: missão sem elas é a missão simples de sempre
+  if (!Array.isArray(out.etapas)) delete out.etapas;
   return out;
 }
+
+/* ---------- Micro-etapas (Fase 4A) ----------
+   Etapas são PARTE da missão, nunca missões-filhas: assim a missão continua
+   sendo uma linha só na lista do dia, e nenhum contador, filtro ou bônus
+   passa a enxergar etapa como tarefa.
+
+   Regra de economia: quebrar uma missão NUNCA aumenta o que ela vale.
+   O XP total da missão é repartido entre as etapas + o bônus de fechamento.
+   Por isso o XP da etapa não é guardado — é sempre derivado do total.       */
+const ETAPA_BONUS_PCT = 0.2;    // fatia do total reservada ao bônus de fechar
+const MAX_ETAPAS_SUAVE = 7;     // teto sugerido (aviso gentil, nunca bloqueio)
+
+const etapasOf = (t) => (Array.isArray(t?.etapas) ? t.etapas : []);
+const temEtapas = (t) => etapasOf(t).length > 0;
+const etapaKey = (taskId, etapaId) => `${taskId}#${etapaId}`;
+
+/** Reparte `xpTotal` entre `n` etapas + bônus, somando exatamente o total. */
+function distribuirXp(xpTotal, n) {
+  const total = Math.max(0, Number(xpTotal) || 0);
+  if (n <= 0) return { xps: [], bonus: 0 };
+  let bonus = Math.max(1, Math.round(total * ETAPA_BONUS_PCT));
+  if (total - bonus < n) bonus = Math.max(0, total - n); // missões muito baratas
+  const restante = Math.max(0, total - bonus);
+  const base = Math.floor(restante / n);
+  const sobra = restante - base * n;
+  const xps = Array.from({ length: n }, (_, i) => base + (i < sobra ? 1 : 0));
+  return { xps, bonus };
+}
+/** Etapas já com o XP calculado, na ordem definida pelo usuário. */
+function etapasComXp(t) {
+  const ets = etapasOf(t);
+  const { xps, bonus } = distribuirXp(t?.xp, ets.length);
+  return { lista: ets.map((e, i) => ({ ...e, xp: xps[i] || 0 })), bonus };
+}
+const etapaFeita = (data, t, e) => (data?.doneToday || []).includes(etapaKey(t.id, e.id));
+const etapasFeitasCount = (data, t) => etapasOf(t).filter((e) => etapaFeita(data, t, e)).length;
+/** A próxima etapa pendente — o "agora" que o card destaca. */
+function proximaEtapa(data, t) {
+  const { lista } = etapasComXp(t);
+  return lista.find((e) => !etapaFeita(data, t, e)) || null;
+}
+const novaEtapaId = () => "e" + Math.random().toString(36).slice(2, 7);
 
 /* ---------- Pular sem culpa: o Mestre nunca cobra ---------- */
 const SKIP_MSGS = [
@@ -708,7 +752,14 @@ export default function RpgDaVida({ user, onSignOut }) {
           const skippedIds = (d.skippedToday && d.skippedToday.date === d.lastResetDate) ? d.skippedToday.ids : [];
           const prevActive = (d.tasks || []).filter((t) => isActiveOn(t, d.lastResetDate));
           const missed = prevActive.filter((t) => !d.doneToday.includes(t.id) && !skippedIds.includes(t.id));
-          const penalty = missed.reduce((s, t) => s + (t.xp || 0), 0);
+          // Missão quebrada em etapas só custa o que ficou por fazer: quem
+          // avançou 3 de 5 passos não pode ser punido como quem não começou.
+          const penalty = missed.reduce((s, t) => {
+            if (!temEtapas(t)) return s + (t.xp || 0);
+            const { lista } = etapasComXp(t);
+            const pendentes = lista.filter((e) => !d.doneToday.includes(etapaKey(t.id, e.id)));
+            return s + pendentes.reduce((a, e) => a + (e.xp || 0), 0);
+          }, 0);
           if (penalty > 0) {
             d.xpTotal = Math.max(0, d.xpTotal - penalty);
             d.gold = Math.max(0, d.gold - penalty);
@@ -816,6 +867,103 @@ export default function RpgDaVida({ user, onSignOut }) {
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 1800); };
 
   /* ---------- concluir / desfazer tarefa (anti-farm: pontua 1x/dia) ---------- */
+  /** Efeitos colaterais de uma missão concluída: contadores, monstrinho,
+   *  remédios, conquistas, nível, chefes e o bônus de dia completo. */
+  const creditarEfeitosMissao = (d, task, today, xpGanho, prevLevel) => {
+        // missão "só uma vez" concluída não volta mais
+        if (recorrenciaOf(task).tipo === "unica" && !(d.completedOnce || []).includes(task.id)) {
+          d.completedOnce = [...(d.completedOnce || []), task.id];
+        }
+        d.catCounts = { ...d.catCounts, [task.category]: (d.catCounts[task.category] || 0) + 1 };
+        if (task.key) d.taskCounts = { ...d.taskCounts, [task.key]: (d.taskCounts[task.key] || 0) + 1 };
+
+        markActive(d);
+        bumpEnergy(d, ENERGY_RECOVER_TASK);
+        d.hardPenaltyNote = null;
+
+        // Tamagotchi: cuidar do pet real enche os medidores do pet virtual.
+        // O vínculo com a categoria é por `sistema`, não por nome/id fixo.
+        const isPetTask = getCategory(d, task.category)?.sistema === "pet";
+        settleTama(d);
+        if (task.need) d.tama[task.need] = 100;
+        if (isPetTask) d.tama.fun = cl100(d.tama.fun + 12);
+        if (d.tama.hunger > 20 && d.tama.thirst > 20 && d.tama.hygiene > 20) d.tama.sick = false;
+        // vínculo (evolução por bom cuidado)
+        if (isPetTask) gainBond(d, 8);
+        if (task.need) gainBond(d, 6);
+
+        // remédios do dia completos?
+        const medIds = (d.meds || []).map((m) => m.id);
+        if (medIds.length && medIds.every((id) => d.doneToday.includes(id))) {
+          if (d.lastMedDate !== today) {
+            d.medStreak = d.lastMedDate === yesterdayKey() ? d.medStreak + 1 : 1;
+            d.lastMedDate = today;
+            d.medDaysTotal = (d.medDaysTotal || 0) + 1;
+          }
+        }
+
+        const newAch = checkAchievements(d, level);
+        d.achievements = newAch.list;
+
+        const newLevel = levelFromXp(d.xpTotal).level;
+        if (newLevel > prevLevel) {
+          d.gems = (d.gems || 0) + GEMS_PER_LEVEL * (newLevel - prevLevel);
+          if (d.soundOn) sound.levelUp();
+          setLevelUpBanner(newLevel);
+          setTimeout(() => setLevelUpBanner(null), 2600);
+        } else if (d.soundOn) sound.ding();
+
+        const color = catView(d, task.category).cor;
+        spawnPop(`+${xpGanho} XP`, color);
+        spawnParticles(color);
+        const arr = FUN_MSGS[task.category] || FUN_MSGS.generic;
+        showToast(arr[Math.floor(Math.random() * arr.length)]);
+        if (newAch.unlocked.length) {
+          const a = ACHIEVEMENTS.find((x) => x.id === newAch.unlocked[0]);
+          setTimeout(() => showToast(`Conquista: ${a.emoji} ${a.name}`), 900);
+        }
+
+        const bdef = checkBosses(d);
+        if (bdef) {
+          d.xpTotal += bdef.rewardXp; d.gold += bdef.rewardGold;
+          d.gems = (d.gems || 0) + (bdef.rewardGems || 0);
+          d.bossesDefeated = [...d.bossesDefeated, bdef.id];
+          if (d.soundOn) sound.boss();
+          setBossBanner(bdef);
+          setTimeout(() => setBossBanner(null), 3200);
+        }
+
+        // bônus por fechar todas as missões do dia (1x/dia)
+        // o "dia completo" ignora puladas e missões já aposentadas
+        const skippedNow = (d.skippedToday && d.skippedToday.date === today) ? d.skippedToday.ids : [];
+        const todays = (d.tasks || []).filter(
+          (x) => isActiveToday(x) && !isRetired(x, d) && !skippedNow.includes(x.id)
+        );
+        if (todays.length && todays.every((t) => d.doneToday.includes(t.id)) && d.dayBonusDate !== today) {
+          d.gems = (d.gems || 0) + GEMS_DAY_BONUS;
+          d.dayBonusDate = today;
+          setTimeout(() => showToast(`Dia completo! +${GEMS_DAY_BONUS} 💎`), 1200);
+        }
+  };
+
+  /** Crédito completo de uma missão concluída. Usado tanto ao marcar a missão
+   *  direto quanto ao fechar a última etapa. `xpGanho` é o XP da missão
+   *  simples, ou apenas o bônus quando ela foi concluída por etapas. */
+  const creditarMissao = (d, task, today, xpGanho) => {
+    const prevLevel = levelFromXp(d.xpTotal).level;
+    const scored = d.scoredToday && d.scoredToday.date === today ? d.scoredToday.ids : [];
+    d.xpTotal += xpGanho;
+    d.gold += xpGanho;
+    d.scoredToday = { date: today, ids: [...scored, task.id] };
+    d.tasksCompleted += 1;
+    // espelho no banco: histórico de conclusões (1x/dia garantido pela PK).
+    // Registra o valor cheio da missão, não só o bônus.
+    registrarConclusao(supabase, userId, {
+      missaoId: task.id, data: today, xp: task.xp || 0, ouro: task.xp || 0,
+    });
+    creditarEfeitosMissao(d, task, today, xpGanho, prevLevel);
+  };
+
   const toggleTask = (task) => {
     const isDone = data.doneToday.includes(task.id);
     setData((prev) => {
@@ -825,96 +973,70 @@ export default function RpgDaVida({ user, onSignOut }) {
         d.doneToday = [...d.doneToday, task.id];
         const scored = d.scoredToday && d.scoredToday.date === today ? d.scoredToday.ids : [];
         const already = scored.includes(task.id);
-        if (!already) {
-          // pontua só na primeira vez do dia
-          const prevLevel = levelFromXp(d.xpTotal).level;
-          d.xpTotal += task.xp;
-          d.gold += task.xp;
-          d.scoredToday = { date: today, ids: [...scored, task.id] };
-          d.tasksCompleted += 1;
-          // espelho no banco: histórico de conclusões (1x/dia garantido pela PK)
-          registrarConclusao(supabase, userId, {
-            missaoId: task.id, data: today, xp: task.xp || 0, ouro: task.xp || 0,
-          });
-          // missão "só uma vez" concluída não volta mais
-          if (recorrenciaOf(task).tipo === "unica" && !(d.completedOnce || []).includes(task.id)) {
-            d.completedOnce = [...(d.completedOnce || []), task.id];
-          }
-          d.catCounts = { ...d.catCounts, [task.category]: (d.catCounts[task.category] || 0) + 1 };
-          if (task.key) d.taskCounts = { ...d.taskCounts, [task.key]: (d.taskCounts[task.key] || 0) + 1 };
-
-          markActive(d);
-          bumpEnergy(d, ENERGY_RECOVER_TASK);
-          d.hardPenaltyNote = null;
-
-          // Tamagotchi: cuidar do pet real enche os medidores do pet virtual.
-          // O vínculo com a categoria é por `sistema`, não por nome/id fixo.
-          const isPetTask = getCategory(d, task.category)?.sistema === "pet";
-          settleTama(d);
-          if (task.need) d.tama[task.need] = 100;
-          if (isPetTask) d.tama.fun = cl100(d.tama.fun + 12);
-          if (d.tama.hunger > 20 && d.tama.thirst > 20 && d.tama.hygiene > 20) d.tama.sick = false;
-          // vínculo (evolução por bom cuidado)
-          if (isPetTask) gainBond(d, 8);
-          if (task.need) gainBond(d, 6);
-
-          // remédios do dia completos?
-          const medIds = (d.meds || []).map((m) => m.id);
-          if (medIds.length && medIds.every((id) => d.doneToday.includes(id))) {
-            if (d.lastMedDate !== today) {
-              d.medStreak = d.lastMedDate === yesterdayKey() ? d.medStreak + 1 : 1;
-              d.lastMedDate = today;
-              d.medDaysTotal = (d.medDaysTotal || 0) + 1;
-            }
-          }
-
-          const newAch = checkAchievements(d, level);
-          d.achievements = newAch.list;
-
-          const newLevel = levelFromXp(d.xpTotal).level;
-          if (newLevel > prevLevel) {
-            d.gems = (d.gems || 0) + GEMS_PER_LEVEL * (newLevel - prevLevel);
-            if (d.soundOn) sound.levelUp();
-            setLevelUpBanner(newLevel);
-            setTimeout(() => setLevelUpBanner(null), 2600);
-          } else if (d.soundOn) sound.ding();
-
-          const color = catView(d, task.category).cor;
-          spawnPop(`+${task.xp} XP`, color);
-          spawnParticles(color);
-          const arr = FUN_MSGS[task.category] || FUN_MSGS.generic;
-          showToast(arr[Math.floor(Math.random() * arr.length)]);
-          if (newAch.unlocked.length) {
-            const a = ACHIEVEMENTS.find((x) => x.id === newAch.unlocked[0]);
-            setTimeout(() => showToast(`Conquista: ${a.emoji} ${a.name}`), 900);
-          }
-
-          const bdef = checkBosses(d);
-          if (bdef) {
-            d.xpTotal += bdef.rewardXp; d.gold += bdef.rewardGold;
-            d.gems = (d.gems || 0) + (bdef.rewardGems || 0);
-            d.bossesDefeated = [...d.bossesDefeated, bdef.id];
-            if (d.soundOn) sound.boss();
-            setBossBanner(bdef);
-            setTimeout(() => setBossBanner(null), 3200);
-          }
-
-          // bônus por fechar todas as missões do dia (1x/dia)
-          // o "dia completo" ignora puladas e missões já aposentadas
-          const skippedNow = (d.skippedToday && d.skippedToday.date === today) ? d.skippedToday.ids : [];
-          const todays = (d.tasks || []).filter(
-            (x) => isActiveToday(x) && !isRetired(x, d) && !skippedNow.includes(x.id)
-          );
-          if (todays.length && todays.every((t) => d.doneToday.includes(t.id)) && d.dayBonusDate !== today) {
-            d.gems = (d.gems || 0) + GEMS_DAY_BONUS;
-            d.dayBonusDate = today;
-            setTimeout(() => showToast(`Dia completo! +${GEMS_DAY_BONUS} 💎`), 1200);
-          }
-        }
-        // se já pontuou hoje, só marca (sem XP, sem efeitos)
+        // pontua só na primeira vez do dia
+        if (!already) creditarMissao(d, task, today, task.xp);
       } else {
         // desfazer: apenas desmarca. NÃO devolve XP nem permite ganhar de novo.
         d.doneToday = d.doneToday.filter((id) => id !== task.id);
+      }
+      return d;
+    });
+  };
+
+  /* ---------- concluir / desfazer uma micro-etapa ----------
+     A etapa dá XP e mantém a chama do dia acesa (quem fez uma etapa se
+     mexeu), mas NÃO conta como tarefa nem para a categoria — senão uma
+     missão de 5 etapas valeria 5 tarefas nas estatísticas.
+     Ao marcar a última, a missão fecha sozinha e recebe o bônus.        */
+  const toggleEtapa = (task, etapa) => {
+    const chave = etapaKey(task.id, etapa.id);
+    const feita = data.doneToday.includes(chave);
+    setData((prev) => {
+      const d = { ...prev };
+      const today = dayKey();
+
+      if (feita) {
+        // desfazer a etapa: desmarca, sem devolver XP (mesma regra da missão)
+        d.doneToday = d.doneToday.filter((id) => id !== chave);
+        return d;
+      }
+
+      d.doneToday = [...d.doneToday, chave];
+      const scored = d.scoredToday && d.scoredToday.date === today ? d.scoredToday.ids : [];
+      if (!scored.includes(chave)) {
+        const prevLevel = levelFromXp(d.xpTotal).level;
+        d.xpTotal += etapa.xp || 0;
+        d.gold += etapa.xp || 0;
+        d.scoredToday = { date: today, ids: [...scored, chave] };
+        markActive(d);
+        bumpEnergy(d, Math.round(ENERGY_RECOVER_TASK / 2));
+        d.hardPenaltyNote = null;
+
+        const newAch = checkAchievements(d, level);
+        d.achievements = newAch.list;
+
+        const newLevel = levelFromXp(d.xpTotal).level;
+        if (newLevel > prevLevel) {
+          d.gems = (d.gems || 0) + GEMS_PER_LEVEL * (newLevel - prevLevel);
+          if (d.soundOn) sound.levelUp();
+          setLevelUpBanner(newLevel);
+          setTimeout(() => setLevelUpBanner(null), 2600);
+        } else if (d.soundOn) sound.ding();
+
+        // comemoração contida de propósito: o clímax é fechar a missão
+        if (etapa.xp) spawnPop(`+${etapa.xp} XP`, catView(d, task.category).cor);
+      }
+
+      // fechou a última? a missão se conclui sozinha e leva o bônus
+      const { lista, bonus } = etapasComXp(task);
+      const todasFeitas = lista.every((e) => d.doneToday.includes(etapaKey(task.id, e.id)));
+      const jaPontuou = (d.scoredToday?.ids || []).includes(task.id);
+      if (todasFeitas && !d.doneToday.includes(task.id)) {
+        d.doneToday = [...d.doneToday, task.id];
+        if (!jaPontuou) {
+          creditarMissao(d, task, today, bonus);
+          setTimeout(() => showToast(`🏆 ${task.name} — missão completa! +${bonus} XP de bônus`), 700);
+        }
       }
       return d;
     });
@@ -1142,7 +1264,8 @@ export default function RpgDaVida({ user, onSignOut }) {
 
       {/* MODO FOCO */}
       {focusMode && (
-        <FocusOverlay data={data} pending={pending} onClose={() => setFocusMode(false)} onDone={toggleTask} onSkip={toggleSkip} />
+        <FocusOverlay data={data} pending={pending} onClose={() => setFocusMode(false)}
+          onDone={toggleTask} onDoneEtapa={toggleEtapa} onSkip={toggleSkip} />
       )}
 
       {/* conteúdo */}
@@ -1151,7 +1274,7 @@ export default function RpgDaVida({ user, onSignOut }) {
         {tab === "vila" && <VillageMap go={setTab} />}
         {tab === "aventura" && (
           <Aventura {...{ data, level, xpInLevel, xpForNext, pct, playerClass, petStage, journeyStage,
-            visibleTasks, skippedTasks, quickOnly, setQuickOnly, toggleTask, toggleSkip, setFocusMode,
+            visibleTasks, skippedTasks, quickOnly, setQuickOnly, toggleTask, toggleEtapa, toggleSkip, setFocusMode,
             pending, allTasks: todayTasks, update, openGame: () => setShowGame(true) }} />
         )}
         {tab === "loja" && <Loja data={data} buyReward={buyReward} buyCosmetic={buyCosmetic} update={update} />}
@@ -1272,13 +1395,15 @@ function InstallHint() {
 }
 
 function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStage, journeyStage,
-  visibleTasks, skippedTasks = [], quickOnly, setQuickOnly, toggleTask, toggleSkip, setFocusMode,
+  visibleTasks, skippedTasks = [], quickOnly, setQuickOnly, toggleTask, toggleEtapa, toggleSkip, setFocusMode,
   pending, allTasks, update, openGame }) {
   const [adding, setAdding] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [showCats, setShowCats] = useState(false);
   const [showSkipped, setShowSkipped] = useState(false);
+  // uma missão expandida por vez — duas listas abertas cansam a vista
+  const [abertaId, setAbertaId] = useState(null);
   const tasks = data.tasks || [];
   // Agrupamento dinâmico: segue a ordem escolhida pelo usuário. Categorias
   // desconhecidas caem num grupo de fallback em vez de quebrar a tela.
@@ -1310,9 +1435,10 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
     update({ tasks: exists ? tasks.map((t) => (t.id === task.id ? task : t)) : [...tasks, task] });
     setAdding(false); setEditingTask(null);
   };
+  // remove a missão e também as marcas de hoje das etapas dela (prefixo "id#")
   const removeTask = (id) => update({
     tasks: tasks.filter((t) => t.id !== id),
-    doneToday: data.doneToday.filter((x) => x !== id),
+    doneToday: data.doneToday.filter((x) => x !== id && !String(x).startsWith(`${id}#`)),
     skippedToday: { date: dayKey(), ids: ((data.skippedToday || {}).ids || []).filter((x) => x !== id) },
   });
 
@@ -1428,38 +1554,12 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
             {cat.ativa === false && <span style={{ color: C.parch2 }} className="text-[10px] font-bold">(inativa)</span>}
           </div>
           {list.map((t) => {
-            const done = data.doneToday.includes(t.id);
             return (
-              <div key={t.id} className="flex items-center gap-2">
-                <button onClick={() => (editMode ? setEditingTask(t) : toggleTask(t))}
-                  style={{ background: done ? "rgba(244,230,197,.45)" : C.parch, border: `3px solid ${done ? C.xpDeep : C.goldDeep}`, borderLeft: `7px solid ${taskColor(t, data)}`, boxShadow: done ? "none" : "0 4px 0 rgba(0,0,0,.2)" }}
-                  className="flex flex-1 items-center gap-2.5 rounded-2xl p-3 text-left active:scale-[.98] transition">
-                  <span style={{ background: done ? C.xp : "transparent", border: `2px solid ${done ? C.xpDeep : C.inkSoft}`, color: "#fff" }}
-                    className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg">
-                    {editMode ? <Pencil size={14} style={{ color: C.inkSoft }} /> : (done && <Check size={18} strokeWidth={3} />)}
-                  </span>
-                  <span style={{ background: taskColor(t, data) + "2e", opacity: done && !editMode ? 0.5 : 1 }}
-                    className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-lg">{taskIcon(t, data)}</span>
-                  <span className="min-w-0 flex-1">
-                    <span style={{ color: C.ink, textDecoration: done && !editMode ? "line-through" : "none", opacity: done && !editMode ? 0.6 : 1 }}
-                      className="block font-bold leading-tight">{t.name}</span>
-                    <span style={{ color: C.inkSoft }} className="block text-xs">{t.desc}</span>
-                  </span>
-                  <span className="flex flex-shrink-0 flex-col items-end gap-1">
-                    <Tag color={C.xpDeep}>+{t.xp} XP</Tag>
-                    {dificuldadeInfo(t).selo && (
-                      <span style={{ color: C.inkSoft }} className="text-[9px] font-bold">{dificuldadeInfo(t).selo}</span>
-                    )}
-                  </span>
-                </button>
-                {editMode ? (
-                  <button onClick={() => removeTask(t.id)} style={{ color: C.ember }} className="p-1 active:scale-90 transition"><Trash2 size={16} /></button>
-                ) : (
-                  // ação secundária, discreta de propósito: nunca compete com o check
-                  <button onClick={() => toggleSkip(t)} title="Pular hoje, sem culpa" aria-label={`Pular ${t.name} hoje`}
-                    style={{ color: C.parch2 }} className="p-1 text-sm opacity-70 active:scale-90 transition">↷</button>
-                )}
-              </div>
+              <MissionCard key={t.id} t={t} data={data} editMode={editMode}
+                aberta={abertaId === t.id}
+                onAbrir={() => setAbertaId((id) => (id === t.id ? null : t.id))}
+                toggleTask={toggleTask} toggleEtapa={toggleEtapa} toggleSkip={toggleSkip}
+                onEditar={() => setEditingTask(t)} onRemover={() => removeTask(t.id)} />
             );
           })}
         </div>
@@ -1520,6 +1620,129 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
           className="flex w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed py-3 text-sm font-bold active:scale-95 transition">
           <Plus size={18} /> Criar nova missão
         </button>
+      )}
+    </div>
+  );
+}
+
+/* ---------- CARD DE MISSÃO ----------
+   Missão sem etapas se comporta exatamente como sempre. Com etapas, o card
+   recolhido mostra progresso e destaca o PRÓXIMO PASSO — acionável ali
+   mesmo, sem precisar expandir. Expandir é opcional.                      */
+function MissionCard({ t, data, editMode, aberta, onAbrir, toggleTask, toggleEtapa, toggleSkip, onEditar, onRemover }) {
+  const done = data.doneToday.includes(t.id);
+  const comEtapas = temEtapas(t);
+  const { lista, bonus } = etapasComXp(t);
+  const feitas = lista.filter((e) => etapaFeita(data, t, e)).length;
+  const proxima = comEtapas ? lista.find((e) => !etapaFeita(data, t, e)) : null;
+  const pct = comEtapas ? Math.round((feitas / lista.length) * 100) : 0;
+  const cor = taskColor(t, data);
+
+  // concluídas sobem e esmaecem: a lista "encolhe" conforme avança
+  const ordenadas = comEtapas
+    ? [...lista].sort((a, b) => Number(etapaFeita(data, t, b)) - Number(etapaFeita(data, t, a)))
+    : [];
+
+  const aoTocarCard = () => {
+    if (editMode) return onEditar();
+    if (comEtapas) return onAbrir();
+    toggleTask(t);
+  };
+
+  return (
+    <div>
+      <div className="flex items-center gap-2">
+        <button onClick={aoTocarCard}
+          style={{ background: done ? "rgba(244,230,197,.45)" : C.parch, border: `3px solid ${done ? C.xpDeep : C.goldDeep}`, borderLeft: `7px solid ${cor}`, boxShadow: done ? "none" : "0 4px 0 rgba(0,0,0,.2)" }}
+          className="flex flex-1 items-center gap-2.5 rounded-2xl p-3 text-left active:scale-[.98] transition">
+          <span style={{ background: done ? C.xp : "transparent", border: `2px solid ${done ? C.xpDeep : C.inkSoft}`, color: "#fff" }}
+            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg">
+            {editMode ? <Pencil size={14} style={{ color: C.inkSoft }} /> : (done && <Check size={18} strokeWidth={3} />)}
+          </span>
+          <span style={{ background: cor + "2e", opacity: done && !editMode ? 0.5 : 1 }}
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-lg">{taskIcon(t, data)}</span>
+          <span className="min-w-0 flex-1">
+            <span style={{ color: C.ink, textDecoration: done && !editMode ? "line-through" : "none", opacity: done && !editMode ? 0.6 : 1 }}
+              className="block font-bold leading-tight">{t.name}</span>
+            {comEtapas ? (
+              <span style={{ color: C.inkSoft }} className="block text-[11px] font-bold">
+                {feitas}/{lista.length} etapas {aberta ? "▾" : "▸"}
+              </span>
+            ) : (
+              <span style={{ color: C.inkSoft }} className="block text-xs">{t.desc}</span>
+            )}
+          </span>
+          <span className="flex flex-shrink-0 flex-col items-end gap-1">
+            <Tag color={C.xpDeep}>+{t.xp} XP</Tag>
+            {dificuldadeInfo(t).selo && (
+              <span style={{ color: C.inkSoft }} className="text-[9px] font-bold">{dificuldadeInfo(t).selo}</span>
+            )}
+          </span>
+        </button>
+        {editMode ? (
+          <button onClick={onRemover} style={{ color: C.ember }} className="p-1 active:scale-90 transition"><Trash2 size={16} /></button>
+        ) : (
+          // ação secundária, discreta de propósito: nunca compete com o check
+          <button onClick={() => toggleSkip(t)} title="Pular hoje, sem culpa" aria-label={`Pular ${t.name} hoje`}
+            style={{ color: C.parch2 }} className="p-1 text-sm opacity-70 active:scale-90 transition">↷</button>
+        )}
+      </div>
+
+      {/* barra de progresso das etapas */}
+      {comEtapas && !editMode && (
+        <div className="mt-1 px-1">
+          <div style={{ background: "rgba(244,230,197,.25)" }} className="h-1.5 w-full overflow-hidden rounded-full">
+            <div style={{ width: `${pct}%`, background: cor, transition: "width .4s" }} className="h-full rounded-full" />
+          </div>
+        </div>
+      )}
+
+      {/* PRÓXIMO PASSO: o único destaque, e acionável sem expandir */}
+      {comEtapas && !editMode && !aberta && proxima && (
+        <button onClick={() => toggleEtapa(t, proxima)}
+          style={{ background: C.parch, border: `2px solid ${cor}`, boxShadow: "0 3px 0 rgba(0,0,0,.18)" }}
+          className="mt-1.5 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left active:scale-[.98] transition">
+          <span className="text-sm">🎯</span>
+          <span className="min-w-0 flex-1">
+            <span style={{ color: C.inkSoft }} className="block text-[9px] font-bold uppercase tracking-wide">Agora</span>
+            <span style={{ color: C.ink }} className="block truncate text-sm font-bold leading-tight">{proxima.nome}</span>
+          </span>
+          <span style={{ color: C.xpDeep }} className="flex-shrink-0 text-[10px] font-bold">+{proxima.xp}</span>
+          <span style={{ background: C.xp, color: "#fff" }} className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg">
+            <Check size={16} strokeWidth={3} />
+          </span>
+        </button>
+      )}
+
+      {/* lista completa (opcional) */}
+      {comEtapas && !editMode && aberta && (
+        <div className="mt-1.5 space-y-1 rounded-xl p-2" style={{ background: "rgba(244,230,197,.12)" }}>
+          <div style={{ color: C.parch2 }} className="px-1 pb-1 text-[10px] font-bold">
+            {lista.reduce((s, e) => s + e.xp, 0)} XP nas etapas + {bonus} XP ao fechar
+          </div>
+          {ordenadas.map((e) => {
+            const f = etapaFeita(data, t, e);
+            const ehProxima = proxima && e.id === proxima.id;
+            return (
+              <button key={e.id} onClick={() => toggleEtapa(t, e)}
+                style={{
+                  background: ehProxima ? C.parch : "transparent",
+                  border: ehProxima ? `2px solid ${cor}` : "2px solid transparent",
+                  opacity: f ? 0.45 : 1,
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left active:scale-[.98] transition">
+                <span style={{ background: f ? C.xp : "transparent", border: `2px solid ${f ? C.xpDeep : C.parch2}`, color: "#fff" }}
+                  className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded">
+                  {f && <Check size={12} strokeWidth={3} />}
+                </span>
+                {ehProxima && <span className="text-xs">🎯</span>}
+                <span style={{ color: f ? C.parch2 : C.parch, textDecoration: f ? "line-through" : "none" }}
+                  className="min-w-0 flex-1 truncate text-sm font-bold">{e.nome}</span>
+                <span style={{ color: C.gold }} className="flex-shrink-0 text-[10px] font-bold">+{e.xp}</span>
+              </button>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -1714,6 +1937,21 @@ function TaskForm({ data, initial, onCancel, onSave }) {
   const [rtipo, setRtipo] = useState(r0.tipo);
   const [rn, setRn] = useState(r0.tipo === "a_cada_n_dias" ? r0.n : 3);
   const [rdata, setRdata] = useState(r0.tipo === "unica" ? r0.data : dayKey());
+  // micro-etapas: opcionais, recolhidas por padrão
+  const [etapas, setEtapas] = useState(etapasOf(initial));
+  const [abrirEtapas, setAbrirEtapas] = useState(etapasOf(initial).length > 0);
+  const [novaEtapa, setNovaEtapa] = useState("");
+  const distrib = distribuirXp(xp, etapas.length);
+  const addEtapa = () => {
+    const n = novaEtapa.trim();
+    if (!n) return;
+    setEtapas((e) => [...e, { id: novaEtapaId(), nome: n }]);
+    setNovaEtapa("");
+  };
+  const moverEtapa = (i, dir) => setEtapas((e) => {
+    const j = i + dir; if (j < 0 || j >= e.length) return e;
+    const n = [...e]; [n[i], n[j]] = [n[j], n[i]]; return n;
+  });
   const WD = [["Dom", 0], ["Seg", 1], ["Ter", 2], ["Qua", 3], ["Qui", 4], ["Sex", 5], ["Sáb", 6]];
   const toggleDay = (n) => setDays((d) => (d.includes(n) ? d.filter((x) => x !== n) : [...d, n].sort((a, b) => a - b)));
   const difInfo = DIFICULDADES.find((d) => d.id === dif) || DIFICULDADES[1];
@@ -1743,6 +1981,8 @@ function TaskForm({ data, initial, onCancel, onSave }) {
     t.recorrencia = buildRecorrencia();
     // `days` é mantido em sincronia só por retrocompatibilidade desta fase
     if (t.recorrencia.tipo === "dias_semana") t.days = t.recorrencia.dias; else delete t.days;
+    // etapas são opcionais: sem elas, a missão volta a ser simples
+    if (etapas.length) t.etapas = etapas.map((e) => ({ id: e.id, nome: e.nome })); else delete t.etapas;
     onSave(t);
   };
   return (
@@ -1854,6 +2094,66 @@ function TaskForm({ data, initial, onCancel, onSave }) {
           </div>
         )}
       </div>
+      {/* micro-etapas — opcionais, recolhidas por padrão.
+          Quem não precisa quebrar a missão nem vê a seção aberta. */}
+      <div className="mb-3">
+        <button onClick={() => setAbrirEtapas((a) => !a)} style={{ color: C.inkSoft }}
+          className="flex w-full items-center gap-2 text-xs font-bold">
+          <span>{abrirEtapas ? "▾" : "▸"}</span>
+          <span>⛏️ Quebrar em etapas (opcional)</span>
+          {etapas.length > 0 && <span style={{ color: C.goldDeep }}>{etapas.length}</span>}
+        </button>
+
+        {abrirEtapas && (
+          <div className="mt-2 rounded-xl p-2" style={{ background: "rgba(0,0,0,.04)" }}>
+            <p style={{ color: C.inkSoft }} className="mb-2 text-[11px]">
+              Divida a missão em passos pequenos. O XP total <b>não muda</b>: os {xp} XP são
+              repartidos entre as etapas, e uma parte fica reservada como bônus por terminar.
+            </p>
+
+            {etapas.map((e, i) => (
+              <div key={e.id} className="mb-1.5 flex items-center gap-1.5">
+                <span style={{ color: C.inkSoft }} className="w-4 text-center text-[10px] font-bold">{i + 1}</span>
+                <input value={e.nome} onChange={(ev) => setEtapas((arr) => arr.map((x) => (x.id === e.id ? { ...x, nome: ev.target.value } : x)))}
+                  style={{ borderColor: C.goldDeep, color: C.ink }}
+                  className="min-w-0 flex-1 rounded-lg border-2 bg-white/70 px-2 py-1 text-sm outline-none" />
+                <span style={{ color: C.xpDeep }} className="w-8 flex-shrink-0 text-right text-[10px] font-bold">+{distrib.xps[i] || 0}</span>
+                <span className="flex flex-shrink-0 flex-col">
+                  <button onClick={() => moverEtapa(i, -1)} disabled={i === 0}
+                    style={{ color: i === 0 ? "rgba(0,0,0,.2)" : C.inkSoft }} className="px-1 text-[10px] leading-none" aria-label="Subir">▲</button>
+                  <button onClick={() => moverEtapa(i, 1)} disabled={i === etapas.length - 1}
+                    style={{ color: i === etapas.length - 1 ? "rgba(0,0,0,.2)" : C.inkSoft }} className="px-1 text-[10px] leading-none" aria-label="Descer">▼</button>
+                </span>
+                <button onClick={() => setEtapas((arr) => arr.filter((x) => x.id !== e.id))}
+                  style={{ color: C.ember }} className="flex-shrink-0 p-0.5" aria-label="Remover etapa"><Trash2 size={13} /></button>
+              </div>
+            ))}
+
+            {etapas.length > 0 && (
+              <div style={{ color: C.inkSoft }} className="mb-2 text-[10px] font-bold">
+                {distrib.xps.reduce((s, n) => s + n, 0)} XP nas etapas + {distrib.bonus} XP de bônus = {xp} XP
+              </div>
+            )}
+
+            <div className="flex gap-1.5">
+              <input value={novaEtapa} onChange={(ev) => setNovaEtapa(ev.target.value)}
+                onKeyDown={(ev) => { if (ev.key === "Enter") { ev.preventDefault(); addEtapa(); } }}
+                placeholder="Ex.: recolher as roupas"
+                style={{ borderColor: C.goldDeep, color: C.ink }}
+                className="min-w-0 flex-1 rounded-lg border-2 bg-white/70 px-2 py-1.5 text-sm outline-none" />
+              <button onClick={addEtapa} style={{ background: C.xpDeep, color: "#fff" }}
+                className="flex-shrink-0 rounded-lg px-3 py-1.5 text-sm font-bold active:scale-95 transition">+</button>
+            </div>
+
+            {etapas.length >= MAX_ETAPAS_SUAVE && (
+              <p style={{ color: C.goldDeep }} className="mt-2 text-[11px]">
+                💡 {etapas.length} passos já é bastante para segurar na cabeça. Que tal virar duas missões?
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="flex gap-2">
         <button onClick={onCancel} style={{ color: C.inkSoft }} className="flex-1 rounded-xl py-2 text-sm font-bold">Cancelar</button>
         <button onClick={submit} style={{ background: C.xpDeep, color: "#fff" }} className="flex-1 rounded-xl py-2 text-sm font-bold">Salvar</button>
@@ -1863,10 +2163,11 @@ function TaskForm({ data, initial, onCancel, onSave }) {
 }
 
 /* ---------- MODO FOCO ---------- */
-function FocusOverlay({ data, pending, onClose, onDone, onSkip }) {
+function FocusOverlay({ data, pending, onClose, onDone, onDoneEtapa, onSkip }) {
   const [i, setI] = useState(0);
   const list = pending;
   const t = list[i];
+  const etapaFoco = t && temEtapas(t) ? proximaEtapa(data, t) : null;
   useEffect(() => { if (i >= list.length && list.length) setI(list.length - 1); }, [list.length, i]);
 
   if (!t) {
@@ -1887,13 +2188,27 @@ function FocusOverlay({ data, pending, onClose, onDone, onSkip }) {
       <div style={{ color: C.gold }} className="text-sm font-bold uppercase tracking-widest">Foco · {i + 1} de {list.length}</div>
       <div className="my-6 flex h-28 w-28 items-center justify-center rounded-3xl text-6xl"
         style={{ background: taskColor(t, data) + "33", border: `4px solid ${taskColor(t, data)}`, animation: "float 3s ease-in-out infinite" }}>{taskIcon(t, data)}</div>
-      <div style={{ color: C.parch }} className="font-serif text-3xl font-black leading-tight">{t.name}</div>
-      <div style={{ color: C.parch2 }} className="mt-2">{t.desc}</div>
-      <div style={{ color: C.parch2 }} className="mt-2 text-xs font-bold">
-        {dificuldadeInfo(t).emoji} {dificuldadeInfo(t).label} · {dificuldadeInfo(t).hint}
-      </div>
-      <div style={{ color: C.gold }} className="mt-3 font-bold">Recompensa: +{t.xp} XP</div>
-      <button onClick={() => { onDone(t); }} style={{ background: C.xp, color: "#06250d", boxShadow: "0 6px 0 #2a6b32" }}
+      {/* com etapas, o foco mira a ETAPA — o alvo do tamanho certo */}
+      {etapaFoco ? (
+        <>
+          <div style={{ color: C.parch }} className="font-serif text-3xl font-black leading-tight">{etapaFoco.nome}</div>
+          <div style={{ color: C.parch2 }} className="mt-2 text-sm">
+            de “{t.name}” · {etapasFeitasCount(data, t)}/{etapasOf(t).length}
+          </div>
+          <div style={{ color: C.gold }} className="mt-3 font-bold">Recompensa: +{etapaFoco.xp} XP</div>
+        </>
+      ) : (
+        <>
+          <div style={{ color: C.parch }} className="font-serif text-3xl font-black leading-tight">{t.name}</div>
+          <div style={{ color: C.parch2 }} className="mt-2">{t.desc}</div>
+          <div style={{ color: C.parch2 }} className="mt-2 text-xs font-bold">
+            {dificuldadeInfo(t).emoji} {dificuldadeInfo(t).label} · {dificuldadeInfo(t).hint}
+          </div>
+          <div style={{ color: C.gold }} className="mt-3 font-bold">Recompensa: +{t.xp} XP</div>
+        </>
+      )}
+      <button onClick={() => (etapaFoco ? onDoneEtapa(t, etapaFoco) : onDone(t))}
+        style={{ background: C.xp, color: "#06250d", boxShadow: "0 6px 0 #2a6b32" }}
         className="mt-8 flex items-center gap-2 rounded-3xl px-10 py-4 font-serif text-xl font-black active:translate-y-1 active:shadow-none transition">
         <Check size={26} strokeWidth={3} /> Concluir
       </button>
