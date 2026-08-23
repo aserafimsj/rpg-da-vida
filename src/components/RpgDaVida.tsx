@@ -551,7 +551,6 @@ const DEFAULT_DATA = {
   bossesDefeated: [],
   soundOn: true,
   streakBrokenNote: false,
-  gbMode: false,
 };
 
 /** Estado novo com missões e refeições já semeadas. */
@@ -1151,13 +1150,9 @@ export default function RpgDaVida({ user, onSignOut }) {
         <InstallHint />
         {tab === "vila" && <VillageMap go={setTab} />}
         {tab === "aventura" && (
-          data.gbMode
-            ? <GameBoyHome data={data} level={level} xpInLevel={xpInLevel} xpForNext={xpForNext} pct={pct}
-                playerClass={playerClass} tama={tama} tasks={todayTasks} toggleTask={toggleTask}
-                exit={() => update({ gbMode: false })} />
-            : <Aventura {...{ data, level, xpInLevel, xpForNext, pct, playerClass, petStage, journeyStage,
-                visibleTasks, skippedTasks, quickOnly, setQuickOnly, toggleTask, toggleSkip, setFocusMode,
-                pending, allTasks: todayTasks, update, openGame: () => setShowGame(true) }} />
+          <Aventura {...{ data, level, xpInLevel, xpForNext, pct, playerClass, petStage, journeyStage,
+            visibleTasks, skippedTasks, quickOnly, setQuickOnly, toggleTask, toggleSkip, setFocusMode,
+            pending, allTasks: todayTasks, update, openGame: () => setShowGame(true) }} />
         )}
         {tab === "loja" && <Loja data={data} buyReward={buyReward} buyCosmetic={buyCosmetic} update={update} />}
         {tab === "pet" && <Pet data={data} tama={tama} tamaCare={tamaCare} pickStarter={pickStarter} update={update} />}
@@ -1240,107 +1235,8 @@ function VillageMap({ go }) {
             <span className="font-pixel" style={{ position: "absolute", left: "50%", bottom: "-12px", transform: "translateX(-50%)", whiteSpace: "nowrap", fontSize: 7, color: "#fff", background: "rgba(20,16,32,.85)", padding: "2px 4px", borderRadius: 3 }}>{s.label}</span>
           </button>
         ))}
-        <button onClick={() => go("stats")} aria-label="Mestre"
-          style={{ position: "absolute", left: "45%", top: "79%", width: "12%" }} className="active:scale-95 transition">
-          {/* a arte do Mestre é opcional: se o arquivo não existir, some sem
-              quebrar o layout — o hotspot continua clicável */}
-          <img src="/mestre_azul.png" alt="Mestre" className="imgpx"
-            onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
-            style={{ width: "100%", filter: "drop-shadow(0 2px 3px rgba(0,0,0,.5))" }} />
-        </button>
       </div>
       <div className="font-pixel mt-3 text-center" style={{ color: C.inkSoft, fontSize: 8 }}>Toque num predio pra entrar</div>
-    </div>
-  );
-}
-
-/* ---------- MODO GAME BOY (skin retrô da tela principal) ---------- */
-const GB = {
-  screen: "#c4cfa1", panel: "#eef2cf", ink: "#20301a", dim: "#5c6b3a",
-  gold: "#b9852a", red: "#b23a2a", green: "#4a8c3a",
-};
-const noac = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-const CAT_MSG = {
-  pet: ["Seu bichinho esta orgulhoso!", "Voce cuidou bem do seu pet!"],
-  casa: ["Monstro da Pia Aberta derrotado!", "Casa protegida com sucesso!", "Geladeira selada!"],
-  pessoal: ["Item essencial garantido!", "Heroi preparado pra aventura!"],
-  trabalho: ["Tarefa de trabalho concluida!", "Produtividade ativada!"],
-  saude: ["Sua saude agradece!", "Buff de vida ativado!"],
-  generic: ["Missao concluida!", "O Caos recuou um passo!", "Sua lenda cresceu!"],
-};
-function GBBox({ children, style, className = "" }) {
-  return (
-    <div style={{ background: GB.panel, border: `3px solid ${GB.ink}`, boxShadow: `inset 0 0 0 3px ${GB.panel}, inset 0 0 0 5px ${GB.ink}`, borderRadius: 6, ...style }}
-      className={`p-4 ${className}`}>{children}</div>
-  );
-}
-function GameBoyHome({ data, level, xpInLevel, xpForNext, pct, playerClass, tama, tasks, toggleTask, exit }) {
-  const [dialog, setDialog] = useState({ title: "BEM-VINDO, HEROI!", body: "Toque numa missao pra comecar a aventura." });
-  const isDone = (id) => data.doneToday.includes(id);
-  const pendingFirst = tasks.find((t) => !isDone(t.id));
-  const handle = (t) => {
-    const already = isDone(t.id);
-    toggleTask(t);
-    if (!already) {
-      const pool = CAT_MSG[t.category] || CAT_MSG.generic;
-      setDialog({ title: `+${t.xp} XP   +${t.xp} OURO`, body: pool[Math.floor(Math.random() * pool.length)] });
-    }
-  };
-  return (
-    <div className="font-pixel" style={{ color: GB.ink }}>
-      <div className="mb-2 flex items-center justify-between">
-        <span style={{ fontSize: 9, color: GB.dim }}>MODO GAME BOY</span>
-        <button onClick={exit} style={{ fontSize: 9, color: GB.ink, background: GB.panel, border: `2px solid ${GB.ink}` }} className="rounded px-2 py-1 active:opacity-70">SAIR X</button>
-      </div>
-
-      <GBBox className="mb-3">
-        <div style={{ fontSize: 13, lineHeight: 1.4 }}>{noac(data.playerName || "HEROI").toUpperCase()}</div>
-        <div style={{ fontSize: 8, color: GB.dim }} className="mt-1">{noac(playerClass || "AVENTUREIRO").toUpperCase()}</div>
-        <div className="mt-3 flex items-center gap-2" style={{ fontSize: 10 }}>
-          <span>Lv{level}</span>
-          <div style={{ flex: 1, height: 12, border: `2px solid ${GB.ink}`, background: GB.screen }}>
-            <div style={{ width: `${pct}%`, height: "100%", background: GB.green }} />
-          </div>
-        </div>
-        <div className="mt-2 flex justify-between" style={{ fontSize: 8, color: GB.dim }}>
-          <span>XP {xpInLevel}/{xpForNext}</span>
-          <span>OURO {data.gold}  GEM {data.gems}  {data.currentStreak}d</span>
-        </div>
-      </GBBox>
-
-      <GBBox className="mb-3" style={{ textAlign: "center" }}>
-        {tama && tama.type ? (
-          <>
-            <img src={monSrc(tama.type, tama.stage)} alt="mon" className="imgpx" style={{ width: 92, height: 92, margin: "0 auto", animation: "monbob 0.9s steps(1) infinite" }} />
-            <div style={{ fontSize: 9 }} className="mt-1">{noac(data.pet?.name || "MONSTRO").toUpperCase()} - {noac(MON_STAGES[tama.stage]).toUpperCase()}</div>
-          </>
-        ) : (
-          <div style={{ fontSize: 9, color: GB.dim }} className="py-6">Escolha seu ovo na aba PET</div>
-        )}
-      </GBBox>
-
-      <GBBox className="mb-3">
-        <div style={{ fontSize: 9 }} className="mb-3">- MISSOES DE HOJE -</div>
-        <div className="space-y-2">
-          {tasks.length === 0 && <div style={{ fontSize: 9, color: GB.dim }}>Sem missoes hoje. Descanse, heroi!</div>}
-          {tasks.map((t) => {
-            const d = isDone(t.id);
-            const cur = !d && t === pendingFirst;
-            return (
-              <button key={t.id} onClick={() => handle(t)} className="flex w-full items-center justify-between text-left active:opacity-60"
-                style={{ fontSize: 10, lineHeight: 1.5, color: d ? GB.dim : GB.ink }}>
-                <span style={{ textDecoration: d ? "line-through" : "none" }}>{cur ? "\u25B6" : "\u00A0\u00A0"} {d ? "[X]" : "[ ]"} {noac(t.name)}</span>
-                <span style={{ color: GB.gold, marginLeft: 8, whiteSpace: "nowrap" }}>+{t.xp}</span>
-              </button>
-            );
-          })}
-        </div>
-      </GBBox>
-
-      <GBBox>
-        <div style={{ fontSize: 11 }}>{dialog.title}</div>
-        <div style={{ fontSize: 9, color: GB.dim, lineHeight: 1.6 }} className="mt-2">{noac(dialog.body)} {"\u25BC"}</div>
-      </GBBox>
     </div>
   );
 }
@@ -2852,18 +2748,6 @@ function Stats({ data, level, playerClass, sound, update, onSignOut, user, onRes
           </span>
         </button>
         <p style={{ color: C.inkSoft }} className="mt-2 text-xs">Para quem quer mais adrenalina: missões não feitas custam XP (o mesmo que valiam). Sempre opcional.</p>
-      </Panel>
-
-      <Panel style={{ borderColor: C.gold }}>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div style={{ color: C.ink }} className="flex items-center gap-2 font-serif font-bold">👾 Modo Game Boy</div>
-            <div style={{ color: C.inkSoft }} className="mt-0.5 text-xs">Deixa a tela principal (Missões) com visual retrô estilo Game Boy Color.</div>
-          </div>
-          <button onClick={() => update({ gbMode: !data.gbMode })}
-            style={{ background: data.gbMode ? C.xpDeep : "rgba(0,0,0,.1)", color: data.gbMode ? "#fff" : C.ink }}
-            className="flex-shrink-0 rounded-xl px-4 py-2 text-sm font-bold active:scale-95 transition">{data.gbMode ? "Ligado" : "Desligado"}</button>
-        </div>
       </Panel>
 
       {/* conferência do banco: só antes da virada e só depois do backfill */}
