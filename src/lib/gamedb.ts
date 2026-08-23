@@ -87,6 +87,9 @@ export function missaoParaLinha(t: Qualquer, userId: string) {
     cor: t.color ?? null,
     dificuldade: dif,
     recorrencia: t.recorrencia ?? { tipo: "sempre" },
+    // micro-etapas: só id e nome. O XP de cada etapa é sempre derivado do
+    // total da missão, para que quebrar nunca aumente o que ela vale.
+    etapas: Array.isArray(t.etapas) ? t.etapas.map((e: Qualquer) => ({ id: e.id, nome: e.nome })) : [],
     need: t.need ?? null,
     key: t.key ?? null,
     ativa: true,
@@ -107,6 +110,7 @@ export function linhaParaMissao(r: Qualquer) {
   if (r.cor) t.color = r.cor;
   if (r.need) t.need = r.need;
   if (r.key) t.key = r.key;
+  if (Array.isArray(r.etapas) && r.etapas.length) t.etapas = r.etapas;
   // `days` legado é reconstruído para as telas que ainda o leem
   if (r.recorrencia && r.recorrencia.tipo === "dias_semana" && Array.isArray(r.recorrencia.dias)) {
     t.days = r.recorrencia.dias;
