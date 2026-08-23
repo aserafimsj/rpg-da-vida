@@ -223,6 +223,64 @@ function proximaEtapa(data, t) {
 }
 const novaEtapaId = () => "e" + Math.random().toString(36).slice(2, 7);
 
+/* ---------- Atributos do herói (Fase 4B) ----------
+   Os atributos representam a EVOLUÇÃO E OS PADRÕES DE COMPORTAMENTO do
+   jogador — não as áreas da vida dele (isso são as categorias) nem a
+   identidade dele (isso é a Classe, escolhida na Criação do Herói).
+
+   Por isso eles crescem a partir de COMO se joga, não de onde se joga:
+   ninguém configura nada, eles emergem do uso.
+
+   Nesta fase os atributos apenas existem e aparecem. Fazê-los influenciar
+   a experiência do herói — sem substituir a classe escolhida — é requisito
+   registrado da Fase 5 (veja DECISOES-DE-PRODUTO.md).                     */
+const ATRIBUTOS = [
+  {
+    id: "foco", nome: "Foco", emoji: "🎯", cor: "#4b8fd6",
+    desc: "Terminar o que se começa",
+    // etapas concluídas e conclusões dentro do Modo Foco
+    pontos: (d) => (d.etapasConcluidas || 0) * 3 + (d.focoConclusoes || 0) * 6,
+  },
+  {
+    id: "disciplina", nome: "Disciplina", emoji: "🛡️", cor: "#8a6bd1",
+    desc: "Sustentar o que é difícil",
+    pontos: (d) => {
+      const p = d.porDificuldade || {};
+      return (p.epica || 0) * 8 + (p.normal || 0) * 2 + (d.medDaysTotal || 0) * 4;
+    },
+  },
+  {
+    id: "energia", nome: "Energia", emoji: "⚡", cor: "#e8843a",
+    desc: "Colocar o corpo em movimento",
+    pontos: (d) => {
+      const p = d.porDificuldade || {};
+      return (d.tasksCompleted || 0) * 2 + (p.rapida || 0) * 3;
+    },
+  },
+  {
+    id: "constancia", nome: "Constância", emoji: "🔥", cor: "#c94f5e",
+    desc: "Voltar, dia após dia",
+    pontos: (d) => ((d.daysActive || []).length) * 6 + (d.longestStreak || 0) * 10,
+  },
+];
+const ATRIBUTO_NIVEL_MAX = 10;
+const ATRIBUTO_BASE = 25; // pontos do nível 1; a curva é quadrática
+
+/** Nível 0–10 a partir dos pontos, com o progresso até o próximo. */
+function nivelAtributo(pontos) {
+  const p = Math.max(0, pontos || 0);
+  const nivel = Math.min(ATRIBUTO_NIVEL_MAX, Math.floor(Math.sqrt(p / ATRIBUTO_BASE)));
+  const pontosDoNivel = ATRIBUTO_BASE * nivel * nivel;
+  const pontosDoProximo = ATRIBUTO_BASE * (nivel + 1) * (nivel + 1);
+  const noMax = nivel >= ATRIBUTO_NIVEL_MAX;
+  const pct = noMax ? 100 : Math.round(((p - pontosDoNivel) / (pontosDoProximo - pontosDoNivel)) * 100);
+  return { nivel, pontos: p, pct: Math.max(0, Math.min(100, pct)), faltam: noMax ? 0 : pontosDoProximo - p, noMax };
+}
+/** A ficha completa, sempre derivada do save — nunca guardada, nunca desatualiza. */
+function calcAtributos(data) {
+  return ATRIBUTOS.map((a) => ({ ...a, ...nivelAtributo(a.pontos(data || {})) }));
+}
+
 /* ---------- Pular sem culpa: o Mestre nunca cobra ---------- */
 const SKIP_MSGS = [
   "Até heróis recuam para atacar melhor amanhã.",
@@ -557,6 +615,10 @@ const DEFAULT_DATA = {
   skippedToday: { date: dayKey(), ids: [] }, // puladas hoje (sem culpa, sem punição)
   skipsTotal: 0,        // contador interno; de propósito não vira tela
   completedOnce: [],    // ids de missões únicas já concluídas (não voltam)
+  // sinais dos atributos (Fase 4B) — alimentam a ficha do herói
+  etapasConcluidas: 0,
+  focoConclusoes: 0,
+  porDificuldade: { rapida: 0, normal: 0, epica: 0 },
   lastResetDate: dayKey(),
   tasks: null,      // semeado em freshData()/migração
   categories: null, // semeado em freshData()/migração
@@ -743,6 +805,22 @@ export default function RpgDaVida({ user, onSignOut }) {
       if (typeof d.skipsTotal !== "number") d.skipsTotal = 0;
       if (!Array.isArray(d.completedOnce)) d.completedOnce = [];
 
+      // ---- Fase 4B: sinais dos atributos ----
+      // O histórico conta desde já onde é possível. Constância e Energia já
+      // nascem do que a pessoa construiu (dias ativos, sequência, tarefas).
+      // Disciplina aproveita as tarefas antigas como "normais" — a divisão por
+      // dificuldade não existia antes, e supor o meio-termo é mais honesto do
+      // que zerar. Foco começa baixo mesmo: é o sinal que passou a ser medido
+      // agora, e ele conta a história dos próximos dias.
+      if (typeof d.etapasConcluidas !== "number") d.etapasConcluidas = 0;
+      if (typeof d.focoConclusoes !== "number") d.focoConclusoes = 0;
+      if (!d.porDificuldade || typeof d.porDificuldade !== "object") {
+        d.porDificuldade = { rapida: 0, normal: d.tasksCompleted || 0, epica: 0 };
+      }
+      ["rapida", "normal", "epica"].forEach((k) => {
+        if (typeof d.porDificuldade[k] !== "number") d.porDificuldade[k] = 0;
+      });
+
       // reset diário
       const today = dayKey();
       if (d.lastResetDate !== today) {
@@ -869,13 +947,17 @@ export default function RpgDaVida({ user, onSignOut }) {
   /* ---------- concluir / desfazer tarefa (anti-farm: pontua 1x/dia) ---------- */
   /** Efeitos colaterais de uma missão concluída: contadores, monstrinho,
    *  remédios, conquistas, nível, chefes e o bônus de dia completo. */
-  const creditarEfeitosMissao = (d, task, today, xpGanho, prevLevel) => {
+  const creditarEfeitosMissao = (d, task, today, xpGanho, prevLevel, viaFoco) => {
         // missão "só uma vez" concluída não volta mais
         if (recorrenciaOf(task).tipo === "unica" && !(d.completedOnce || []).includes(task.id)) {
           d.completedOnce = [...(d.completedOnce || []), task.id];
         }
         d.catCounts = { ...d.catCounts, [task.category]: (d.catCounts[task.category] || 0) + 1 };
         if (task.key) d.taskCounts = { ...d.taskCounts, [task.key]: (d.taskCounts[task.key] || 0) + 1 };
+        // sinal de atributo: Disciplina pesa a dificuldade, Energia o volume
+        const dif = dificuldadeOf(task);
+        d.porDificuldade = { ...(d.porDificuldade || {}), [dif]: ((d.porDificuldade || {})[dif] || 0) + 1 };
+        if (viaFoco) d.focoConclusoes = (d.focoConclusoes || 0) + 1;
 
         markActive(d);
         bumpEnergy(d, ENERGY_RECOVER_TASK);
@@ -949,7 +1031,7 @@ export default function RpgDaVida({ user, onSignOut }) {
   /** Crédito completo de uma missão concluída. Usado tanto ao marcar a missão
    *  direto quanto ao fechar a última etapa. `xpGanho` é o XP da missão
    *  simples, ou apenas o bônus quando ela foi concluída por etapas. */
-  const creditarMissao = (d, task, today, xpGanho) => {
+  const creditarMissao = (d, task, today, xpGanho, viaFoco) => {
     const prevLevel = levelFromXp(d.xpTotal).level;
     const scored = d.scoredToday && d.scoredToday.date === today ? d.scoredToday.ids : [];
     d.xpTotal += xpGanho;
@@ -961,12 +1043,21 @@ export default function RpgDaVida({ user, onSignOut }) {
     registrarConclusao(supabase, userId, {
       missaoId: task.id, data: today, xp: task.xp || 0, ouro: task.xp || 0,
     });
-    creditarEfeitosMissao(d, task, today, xpGanho, prevLevel);
+    creditarEfeitosMissao(d, task, today, xpGanho, prevLevel, viaFoco);
   };
 
-  const toggleTask = (task) => {
+  /** Avisa quando um atributo sobe de nível — comemoração pequena e discreta. */
+  const avisarAtributo = (antes, depois) => {
+    const mapa = {};
+    antes.forEach((a) => { mapa[a.id] = a.nivel; });
+    const subiu = calcAtributos(depois).find((a) => a.nivel > (mapa[a.id] ?? 0));
+    if (subiu) setTimeout(() => showToast(`${subiu.emoji} ${subiu.nome} subiu para ${subiu.nivel}!`), 1500);
+  };
+
+  const toggleTask = (task, viaFoco) => {
     const isDone = data.doneToday.includes(task.id);
     setData((prev) => {
+      const antesAtr = calcAtributos(prev);
       const d = { ...prev };
       const today = dayKey();
       if (!isDone) {
@@ -974,11 +1065,12 @@ export default function RpgDaVida({ user, onSignOut }) {
         const scored = d.scoredToday && d.scoredToday.date === today ? d.scoredToday.ids : [];
         const already = scored.includes(task.id);
         // pontua só na primeira vez do dia
-        if (!already) creditarMissao(d, task, today, task.xp);
+        if (!already) creditarMissao(d, task, today, task.xp, viaFoco);
       } else {
         // desfazer: apenas desmarca. NÃO devolve XP nem permite ganhar de novo.
         d.doneToday = d.doneToday.filter((id) => id !== task.id);
       }
+      avisarAtributo(antesAtr, d);
       return d;
     });
   };
@@ -988,10 +1080,11 @@ export default function RpgDaVida({ user, onSignOut }) {
      mexeu), mas NÃO conta como tarefa nem para a categoria — senão uma
      missão de 5 etapas valeria 5 tarefas nas estatísticas.
      Ao marcar a última, a missão fecha sozinha e recebe o bônus.        */
-  const toggleEtapa = (task, etapa) => {
+  const toggleEtapa = (task, etapa, viaFoco) => {
     const chave = etapaKey(task.id, etapa.id);
     const feita = data.doneToday.includes(chave);
     setData((prev) => {
+      const antesAtr = calcAtributos(prev);
       const d = { ...prev };
       const today = dayKey();
 
@@ -1008,6 +1101,9 @@ export default function RpgDaVida({ user, onSignOut }) {
         d.xpTotal += etapa.xp || 0;
         d.gold += etapa.xp || 0;
         d.scoredToday = { date: today, ids: [...scored, chave] };
+        // sinal de atributo: Foco cresce com quem termina o que começou
+        d.etapasConcluidas = (d.etapasConcluidas || 0) + 1;
+        if (viaFoco) d.focoConclusoes = (d.focoConclusoes || 0) + 1;
         markActive(d);
         bumpEnergy(d, Math.round(ENERGY_RECOVER_TASK / 2));
         d.hardPenaltyNote = null;
@@ -1034,10 +1130,11 @@ export default function RpgDaVida({ user, onSignOut }) {
       if (todasFeitas && !d.doneToday.includes(task.id)) {
         d.doneToday = [...d.doneToday, task.id];
         if (!jaPontuou) {
-          creditarMissao(d, task, today, bonus);
+          creditarMissao(d, task, today, bonus, viaFoco);
           setTimeout(() => showToast(`🏆 ${task.name} — missão completa! +${bonus} XP de bônus`), 700);
         }
       }
+      avisarAtributo(antesAtr, d);
       return d;
     });
   };
@@ -2209,7 +2306,8 @@ function FocusOverlay({ data, pending, onClose, onDone, onDoneEtapa, onSkip }) {
           <div style={{ color: C.gold }} className="mt-3 font-bold">Recompensa: +{t.xp} XP</div>
         </>
       )}
-      <button onClick={() => (etapaFoco ? onDoneEtapa(t, etapaFoco) : onDone(t))}
+      {/* `true` marca que a conclusão veio do Modo Foco — sinal do atributo Foco */}
+      <button onClick={() => (etapaFoco ? onDoneEtapa(t, etapaFoco, true) : onDone(t, true))}
         style={{ background: C.xp, color: "#06250d", boxShadow: "0 6px 0 #2a6b32" }}
         className="mt-8 flex items-center gap-2 rounded-3xl px-10 py-4 font-serif text-xl font-black active:translate-y-1 active:shadow-none transition">
         <Check size={26} strokeWidth={3} /> Concluir
@@ -2603,6 +2701,8 @@ function Avatar({ data, level, journeyStage, petEnergy = 100, update }) {
         </div>
       </Panel>
 
+      <FichaAtributos data={data} />
+
       <Panel className="text-center">
         {supremo ? (
           <div style={{ color: C.goldDeep }} className="font-serif text-lg font-black">🔥 Forma Suprema desbloqueada!</div>
@@ -2614,6 +2714,57 @@ function Avatar({ data, level, journeyStage, petEnergy = 100, update }) {
         )}
       </Panel>
     </div>
+  );
+}
+
+/* ---------- FICHA DO HERÓI (atributos) ----------
+   Os atributos são um retrato de como a pessoa vem jogando. Aparecem ao
+   lado do personagem, sem competir com as missões do dia.               */
+function FichaAtributos({ data }) {
+  const atributos = calcAtributos(data);
+  const [detalhe, setDetalhe] = useState(null);
+
+  return (
+    <Panel>
+      <div className="mb-1 flex items-baseline justify-between">
+        <div style={{ color: C.ink }} className="font-serif text-lg font-black">📜 Ficha do Herói</div>
+        <span style={{ color: C.inkSoft }} className="text-[10px] font-bold">nível 0–{ATRIBUTO_NIVEL_MAX}</span>
+      </div>
+      <p style={{ color: C.inkSoft }} className="mb-3 text-xs">
+        Seus atributos crescem com o <b>jeito</b> que você joga — não é preciso configurar nada.
+      </p>
+
+      <div className="space-y-2.5">
+        {atributos.map((a) => (
+          <button key={a.id} onClick={() => setDetalhe(detalhe === a.id ? null : a.id)}
+            className="w-full text-left active:scale-[.99] transition">
+            <div className="mb-1 flex items-baseline justify-between">
+              <span style={{ color: C.ink }} className="text-sm font-bold">
+                {a.emoji} {a.nome}
+              </span>
+              <span style={{ color: a.noMax ? C.goldDeep : C.inkSoft }} className="text-xs font-black">
+                {a.noMax ? "MÁXIMO ✦" : a.nivel}
+              </span>
+            </div>
+            <div style={{ background: "rgba(58,42,24,.15)" }} className="h-2.5 w-full overflow-hidden rounded-full">
+              <div style={{ width: `${a.pct}%`, background: a.cor, transition: "width .6s cubic-bezier(.2,.8,.2,1)" }}
+                className="h-full rounded-full" />
+            </div>
+            {detalhe === a.id && (
+              <div style={{ color: C.inkSoft }} className="mt-1 text-[11px]">
+                {a.desc}. {a.noMax
+                  ? "Você chegou ao topo deste atributo. 👑"
+                  : <>Faltam <b>{a.faltam}</b> pontos para o nível {a.nivel + 1}.</>}
+              </div>
+            )}
+          </button>
+        ))}
+      </div>
+
+      <p style={{ color: C.inkSoft }} className="mt-3 text-[11px]">
+        Toque num atributo para ver o que ele mede.
+      </p>
+    </Panel>
   );
 }
 
