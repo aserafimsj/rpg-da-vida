@@ -6,6 +6,7 @@ import { getSupabase } from "@/lib/supabaseClient";
 import { getDeferred, subscribe as subscribeInstall, doInstall, isStandalone, isIOS } from "@/lib/pwa";
 import { pushSupported, currentSubscription, enablePush, disablePush, sendTestLocal } from "@/lib/push";
 import RoutineDefense from "./RoutineDefense";
+import CriacaoDoHeroi from "./CriacaoDoHeroi";
 import { loadSaveComVersao, persistSave } from "@/lib/save";
 import {
   lendoDasTabelas, listarCategorias, listarMissoes, backfill,
@@ -222,6 +223,37 @@ function proximaEtapa(data, t) {
   return lista.find((e) => !etapaFeita(data, t, e)) || null;
 }
 const novaEtapaId = () => "e" + Math.random().toString(36).slice(2, 7);
+
+/* ---------- Perfil do herói (Fase 5A) ----------
+   A CLASSE é identidade escolhida pelo jogador — não é derivada de categoria
+   nem de atributo. Por isso as classes aqui são arquétipos de postura diante
+   da vida, sem amarração com as áreas em que a pessoa atua.
+
+   Enquanto ninguém escolhe uma classe, o app segue mostrando a classe
+   calculada pela categoria favorita, como desde a Fase 1.                  */
+const CLASSES = [
+  { id: "guardiao", nome: "Guardião", emoji: "🛡️", vibe: "protege o que importa" },
+  { id: "cavaleiro", nome: "Cavaleiro", emoji: "⚔️", vibe: "encara de frente" },
+  { id: "mago", nome: "Mago", emoji: "🧙", vibe: "resolve com engenho" },
+  { id: "cacador", nome: "Caçador", emoji: "🏹", vibe: "vai atrás do alvo" },
+  { id: "druida", nome: "Druida", emoji: "🌿", vibe: "cuida e cultiva" },
+  { id: "bardo", nome: "Bardo", emoji: "🎭", vibe: "leva leveza aos dias" },
+  { id: "oraculo", nome: "Oráculo", emoji: "🔮", vibe: "enxerga adiante" },
+  { id: "domador", nome: "Domador", emoji: "🐉", vibe: "doma o próprio caos" },
+];
+const classeInfo = (id) => CLASSES.find((c) => c.id === id) || null;
+
+const METAS_STREAK = [
+  { dias: 3, rotulo: "3 dias", vibe: "começar é o que importa" },
+  { dias: 7, rotulo: "1 semana", vibe: "o clássico" },
+  { dias: 15, rotulo: "15 dias", vibe: "para quem quer firmar" },
+  { dias: 30, rotulo: "30 dias", vibe: "desafio de verdade" },
+];
+const META_STREAK_PADRAO = 7;
+const perfilDe = (data) => (data && typeof data.perfil === "object" && data.perfil) || {};
+const metaStreakDe = (data) => perfilDe(data).metaStreak || META_STREAK_PADRAO;
+/** A glicose é específica demais para todo mundo: só aparece para quem pediu. */
+const mostraGlicose = (data) => perfilDe(data).mostrarGlicose !== false;
 
 /* ---------- Atributos do herói (Fase 4B) ----------
    Os atributos representam a EVOLUÇÃO E OS PADRÕES DE COMPORTAMENTO do
@@ -659,6 +691,41 @@ const DEFAULT_DATA = {
   streakBrokenNote: false,
 };
 
+/** Converte o plano da Criação do Herói num save pronto para jogar.
+ *  Só é usado por quem está começando — nunca mexe num jogo existente. */
+function dataDoPlano(plano) {
+  const d = freshData();
+  d.playerName = plano.nomeHeroi || "Herói";
+  d.perfil = {
+    classe: plano.classe || null,
+    metaStreak: plano.metaStreak || META_STREAK_PADRAO,
+    mostrarGlicose: !!plano.mostrarGlicose,
+    onboardingEm: new Date().toISOString(),
+  };
+  // as áreas escolhidas viram as categorias do jogo
+  d.categories = (plano.categorias || []).map((c, i) => ({
+    id: c.idBase, nome: c.nome, emoji: c.emoji, cor: c.cor,
+    ordem: i, ativa: true, sistema: c.sistema || null,
+  }));
+  // garante as categorias de sistema, que sustentam o monstrinho e a Saúde
+  ["pet", "saude"].forEach((sis) => {
+    if (!d.categories.some((c) => c.sistema === sis)) {
+      const padrao = freshCategories().find((c) => c.sistema === sis);
+      d.categories.push({ ...padrao, ordem: d.categories.length, ativa: true });
+    }
+  });
+  // missões escolhidas; quem não escolheu nenhuma começa com a lista vazia
+  d.tasks = (plano.missoes || []).map((m, i) => normalizeTask({
+    id: "c_" + Math.random().toString(36).slice(2),
+    name: m.nome, desc: "", xp: 10, category: m.area,
+    dificuldade: "normal", recorrencia: { tipo: "sempre" },
+  }));
+  d.catCounts = {};
+  d.categories.forEach((c) => { d.catCounts[c.id] = 0; });
+  d.porDificuldade = { rapida: 0, normal: 0, epica: 0 };
+  return d;
+}
+
 /** Estado novo com missões e refeições já semeadas. */
 function freshData() {
   return {
@@ -727,6 +794,7 @@ export default function RpgDaVida({ user, onSignOut }) {
   const [quickOnly, setQuickOnly] = useState(false);
   const [showGame, setShowGame] = useState(false);
   const [toast, setToast] = useState(null);
+  const [precisaOnboarding, setPrecisaOnboarding] = useState(false);
   const sound = useSound();
   const saveTimer = useRef(null);
   const versaoSave = useRef(null);   // updated_at conhecido, p/ detectar concorrência
@@ -736,11 +804,21 @@ export default function RpgDaVida({ user, onSignOut }) {
     let alive = true;
     (async () => {
       let loaded = null;
+      let semSave = false;
       try {
         const r = await loadSaveComVersao(supabase, userId);
         loaded = r.data;
         versaoSave.current = r.updatedAt;
-      } catch (e) { /* primeira vez ou erro de rede */ }
+        // Só é "usuário novo" se a consulta FUNCIONOU e não havia save.
+        // Um erro de rede jamais pode ser confundido com jogo vazio — seria
+        // o caminho para sobrescrever o progresso de alguém.
+        semSave = r.data == null;
+      } catch (e) { /* offline ou instável: segue com o que tiver, sem onboarding */ }
+
+      if (semSave && alive) {
+        setPrecisaOnboarding(true);
+        return; // o jogo só começa depois da Criação do Herói (ou de pulá-la)
+      }
       let d = { ...freshData(), ...(loaded || {}) };
 
       // ---- migração de saves antigos (preserva o progresso) ----
@@ -901,6 +979,22 @@ export default function RpgDaVida({ user, onSignOut }) {
       } catch (e) { /* tenta de novo no próximo save */ }
     }, 500);
   }, [data, userId]);
+
+  /* ---------- Criação do Herói: só para quem está começando ---------- */
+  if (precisaOnboarding) {
+    const iniciar = (d) => { setData(d); setPrecisaOnboarding(false); };
+    return (
+      <CriacaoDoHeroi
+        onConcluir={(plano) => iniciar(dataDoPlano(plano))}
+        onPular={() => {
+          // mundo pronto de reserva: começa a jogar agora, configura depois
+          const d = freshData();
+          d.perfil = { classe: null, metaStreak: META_STREAK_PADRAO, mostrarGlicose: false, onboardingPuladoEm: new Date().toISOString() };
+          iniciar(d);
+        }}
+      />
+    );
+  }
 
   if (!data) {
     return (
@@ -1571,7 +1665,13 @@ function Aventura({ data, level, xpInLevel, xpForNext, pct, playerClass, petStag
         <div className="mt-3 flex items-center justify-between text-sm font-bold" style={{ color: C.ink }}>
           <span className="flex items-center gap-1"><Coins size={16} style={{ color: C.goldDeep }} /> {data.gold}</span>
           <span className="flex items-center gap-1"><Gem size={15} style={{ color: "#9b59b6" }} /> {data.gems || 0}</span>
-          <span className="flex items-center gap-1"><Flame size={16} style={{ color: C.ember }} /> {data.currentStreak} dias</span>
+          {/* a meta é do usuário: some quando batida, para não virar cobrança */}
+          <span className="flex items-center gap-1" title={`Meta de ${metaStreakDe(data)} dias`}>
+            <Flame size={16} style={{ color: C.ember }} />
+            {data.currentStreak >= metaStreakDe(data)
+              ? <>{data.currentStreak} dias 🎯</>
+              : <>{data.currentStreak}/{metaStreakDe(data)} dias</>}
+          </span>
         </div>
       </Panel>
 
@@ -3054,7 +3154,7 @@ function Saude({ data, addWater, toggleTask, update, medDone }) {
       </Panel>
 
       {/* glicose */}
-      <GlucosePanel data={data} update={update} />
+      {mostraGlicose(data) && <GlucosePanel data={data} update={update} />}
 
       {/* botão editar refeições/remédios */}
       <div className="flex justify-end px-1">
@@ -3221,6 +3321,8 @@ function Stats({ data, level, playerClass, sound, update, onSignOut, user, onRes
       {/* conferência do banco: só antes da virada e só depois do backfill */}
       {!lendoDasTabelas() && data.backfillFase3Em && <PainelParidade data={data} user={user} />}
 
+      <PerfilPanel data={data} update={update} />
+
       <InstallSection />
 
       <NotificationsPanel user={user} />
@@ -3234,6 +3336,79 @@ function Stats({ data, level, playerClass, sound, update, onSignOut, user, onRes
         <LogOut size={16} /> Sair da conta
       </button>
     </div>
+  );
+}
+
+/* ---------- Perfil do herói (Fase 5A) ----------
+   Para quem já joga: escolher a classe, a meta de sequência e ligar/desligar
+   o painel de glicose — sem nunca tocar em categorias, missões ou progresso. */
+function PerfilPanel({ data, update }) {
+  const perfil = perfilDe(data);
+  const [aberto, setAberto] = useState(false);
+  const atual = classeInfo(perfil.classe);
+  const setPerfil = (patch) => update({ perfil: { ...perfil, ...patch } });
+
+  return (
+    <Panel style={{ borderColor: C.gold }}>
+      <button onClick={() => setAberto((a) => !a)} className="flex w-full items-center justify-between text-left">
+        <span>
+          <span style={{ color: C.ink }} className="flex items-center gap-2 font-serif font-bold">
+            {atual ? `${atual.emoji} ${atual.nome}` : "⚔️ Seu herói"}
+          </span>
+          <span style={{ color: C.inkSoft }} className="mt-0.5 block text-xs">
+            {atual ? `Classe escolhida · meta de ${metaStreakDe(data)} dias` : "Escolha sua classe e sua meta de sequência"}
+          </span>
+        </span>
+        <span style={{ color: C.inkSoft }} className="text-sm">{aberto ? "▾" : "▸"}</span>
+      </button>
+
+      {aberto && (
+        <div className="mt-3 space-y-4">
+          <div>
+            <div style={{ color: C.inkSoft }} className="mb-1.5 text-xs font-bold">Classe — sua identidade, não uma mecânica</div>
+            <div className="grid grid-cols-2 gap-2">
+              {CLASSES.map((c) => (
+                <button key={c.id} onClick={() => setPerfil({ classe: perfil.classe === c.id ? null : c.id })}
+                  style={{ background: perfil.classe === c.id ? C.gold : "rgba(0,0,0,.05)", color: C.ink }}
+                  className="rounded-xl px-2 py-2 text-center active:scale-95 transition">
+                  <div className="text-lg">{c.emoji}</div>
+                  <div className="text-xs font-bold">{c.nome}</div>
+                </button>
+              ))}
+            </div>
+            {!atual && (
+              <p style={{ color: C.inkSoft }} className="mt-1.5 text-[11px]">
+                Sem classe escolhida, o app segue mostrando a categoria em que você mais atua.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <div style={{ color: C.inkSoft }} className="mb-1.5 text-xs font-bold">🔥 Meta de sequência</div>
+            <div className="flex gap-2">
+              {METAS_STREAK.map((m) => (
+                <button key={m.dias} onClick={() => setPerfil({ metaStreak: m.dias })}
+                  style={{ background: metaStreakDe(data) === m.dias ? C.ember : "rgba(0,0,0,.05)",
+                           color: metaStreakDe(data) === m.dias ? "#fff" : C.ink }}
+                  className="flex-1 rounded-xl py-2 text-xs font-bold active:scale-95 transition">{m.dias}d</button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <span>
+              <span style={{ color: C.ink }} className="font-bold">🩸 Painel de glicose</span>
+              <span style={{ color: C.inkSoft }} className="mt-0.5 block text-xs">Aparece na aba Saúde</span>
+            </span>
+            <button onClick={() => setPerfil({ mostrarGlicose: !mostraGlicose(data) })}
+              style={{ background: mostraGlicose(data) ? C.xpDeep : "rgba(0,0,0,.15)", color: mostraGlicose(data) ? "#fff" : C.ink }}
+              className="flex-shrink-0 rounded-xl px-4 py-2 text-sm font-bold active:scale-95 transition">
+              {mostraGlicose(data) ? "Ligado" : "Desligado"}
+            </button>
+          </div>
+        </div>
+      )}
+    </Panel>
   );
 }
 
@@ -3578,6 +3753,9 @@ function stageFor(stages, xp) {
 /** Classe genérica, calculada sobre as categorias do próprio usuário.
  *  (Classes por atributo entram na Fase 4.) */
 function getPlayerClass(data, level) {
+  // Classe escolhida pelo jogador manda: identidade não se calcula.
+  const escolhida = classeInfo(perfilDe(data).classe);
+  if (escolhida) return escolhida.nome;
   const counts = data?.catCounts || {};
   const total = data?.tasksCompleted || 0;
   if (total < 8) return "Aventureiro Novato";
