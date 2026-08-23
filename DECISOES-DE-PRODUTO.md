@@ -92,6 +92,41 @@ Possibilidades a avaliar na Fase 5 (nenhuma decidida, nenhuma implementada):
 - Migração automática por usuário (backfill no app), sem script manual.
 - Virada da leitura por flag (`NEXT_PUBLIC_LEITURA_TABELAS`), reversível a qualquer momento.
 
+### Fase 4A — Micro-etapas ✅ no ar
+
+- Etapas são **parte da missão**, nunca missões-filhas — senão o contador do dia, o Modo Foco,
+  o filtro de rápidas, o bônus do dia, a penalidade do Modo Difícil, "Tarefas feitas", a
+  categoria favorita e o agrupamento passariam a contar etapa como tarefa.
+- **Quebrar nunca aumenta o XP.** O XP da etapa não é armazenado: é sempre derivado do total
+  da missão, então não existe estado onde a conta divirja. 40 XP em 4 etapas = 8+8+8+8 + 8 de bônus.
+- Missões que já existem **mantêm o XP atual** ao serem quebradas.
+- Etapa concluída entra em `doneToday` com id composto (`t_quarto#e1`) — ganha de graça o reset
+  diário, a trava anti-farm e o comportamento em missões recorrentes.
+- Etapa dá XP e mantém a chama acesa, mas **não conta como tarefa nem para a categoria**.
+- Fechamento **automático** ao marcar a última etapa, com o bônus.
+- **Comemoração forte só no fechamento** — sem confete ou som por etapa, para o clímax não diluir.
+- Teto suave de **7 etapas** com sugestão gentil, nunca bloqueio.
+- No Modo Difícil, missão quebrada **só custa as etapas que faltaram**.
+
+### Fase 4B — Atributos ✅ no ar
+
+- Quatro atributos: **🎯 Foco · 🛡️ Disciplina · ⚡ Energia · 🔥 Constância**.
+- Crescem do **comportamento**, não das categorias — coerente com a diretriz das quatro camadas:
+  atributos são padrões de comportamento, categorias são áreas da vida. **Ninguém configura nada.**
+  - **Foco** — etapas concluídas e conclusões dentro do Modo Foco
+  - **Disciplina** — missões épicas e normais concluídas, dias de remédio em dia
+  - **Energia** — volume de missões concluídas e missões rápidas
+  - **Constância** — dias ativos e maior sequência
+- **Nível 0–10** com barra, curva quadrática (nível 10 = 2500 pontos). Nunca regride.
+- **O histórico conta desde já** onde é possível: Constância, Energia e Disciplina nascem do que
+  já foi construído. **Foco começa em 0** de propósito — é o sinal que passou a ser medido agora.
+  Na migração, as tarefas antigas entram como "normais": supor o meio-termo é mais honesto que zerar.
+- Aparecem na **aba Avatar**, ao lado do personagem — a ficha do herói.
+- **Sem efeito no jogo nesta fase.** Fazer os atributos influenciarem a experiência sem substituir
+  a classe escolhida é requisito registrado da Fase 5 (veja acima).
+- A **classe continua** sendo "Guardião de {categoria favorita}" até a Criação do Herói.
+- Sem migração de banco: os sinais vivem no save.
+
 ### Limpeza (16/08/2026)
 
 - **Modo Game Boy removido.** Duplicava a renderização das missões e dobrava o trabalho de cada
@@ -105,9 +140,9 @@ Possibilidades a avaliar na Fase 5 (nenhuma decidida, nenhuma implementada):
 
 | Fase | Escopo | Situação |
 |---|---|---|
-| **4A** | **Micro-etapas** — quebrar missão grande em partes, cada etapa com XP próprio **+ bônus ao concluir a missão** | Próxima |
-| **4B** | **Atributos** — Foco, Disciplina, Energia e Constância | Depois |
-| **5** | **Criação do Herói** — onboarding, personalização inicial, escolha de classe e montagem do mundo em torno da vida do jogador | Por último |
+| **4A** | **Micro-etapas** — quebrar missão grande em partes, cada etapa com XP próprio **+ bônus ao concluir a missão** | ✅ no ar |
+| **4B** | **Atributos** — Foco, Disciplina, Energia e Constância | ✅ no ar |
+| **5** | **Criação do Herói** — onboarding, personalização inicial, escolha de classe e montagem do mundo em torno da vida do jogador | Próxima |
 
 ---
 
