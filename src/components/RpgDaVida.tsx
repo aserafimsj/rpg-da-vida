@@ -8,6 +8,9 @@ import { pushSupported, currentSubscription, enablePush, disablePush, sendTestLo
 import RoutineDefense from "./RoutineDefense";
 import CriacaoDoHeroi from "./CriacaoDoHeroi";
 import { loadSaveComVersao, persistSave } from "@/lib/save";
+// regras de derivação (nível e atributos) moram em lib/regras: o snapshot do
+// QuesTAH World lê as MESMAS funções, para nunca haver fórmula duplicada
+import { xpToNext, levelFromXp, ATRIBUTOS, ATRIBUTO_NIVEL_MAX, nivelAtributo, calcAtributos } from "@/lib/regras";
 import {
   lendoDasTabelas, listarCategorias, listarMissoes, backfill,
   salvarCategorias, salvarMissoes, apagarCategorias, apagarMissoes,
@@ -255,63 +258,6 @@ const metaStreakDe = (data) => perfilDe(data).metaStreak || META_STREAK_PADRAO;
 /** A glicose é específica demais para todo mundo: só aparece para quem pediu. */
 const mostraGlicose = (data) => perfilDe(data).mostrarGlicose !== false;
 
-/* ---------- Atributos do herói (Fase 4B) ----------
-   Os atributos representam a EVOLUÇÃO E OS PADRÕES DE COMPORTAMENTO do
-   jogador — não as áreas da vida dele (isso são as categorias) nem a
-   identidade dele (isso é a Classe, escolhida na Criação do Herói).
-
-   Por isso eles crescem a partir de COMO se joga, não de onde se joga:
-   ninguém configura nada, eles emergem do uso.
-
-   Nesta fase os atributos apenas existem e aparecem. Fazê-los influenciar
-   a experiência do herói — sem substituir a classe escolhida — é requisito
-   registrado da Fase 5 (veja DECISOES-DE-PRODUTO.md).                     */
-const ATRIBUTOS = [
-  {
-    id: "foco", nome: "Foco", emoji: "🎯", cor: "#4b8fd6",
-    desc: "Terminar o que se começa",
-    // etapas concluídas e conclusões dentro do Modo Foco
-    pontos: (d) => (d.etapasConcluidas || 0) * 3 + (d.focoConclusoes || 0) * 6,
-  },
-  {
-    id: "disciplina", nome: "Disciplina", emoji: "🛡️", cor: "#8a6bd1",
-    desc: "Sustentar o que é difícil",
-    pontos: (d) => {
-      const p = d.porDificuldade || {};
-      return (p.epica || 0) * 8 + (p.normal || 0) * 2 + (d.medDaysTotal || 0) * 4;
-    },
-  },
-  {
-    id: "energia", nome: "Energia", emoji: "⚡", cor: "#e8843a",
-    desc: "Colocar o corpo em movimento",
-    pontos: (d) => {
-      const p = d.porDificuldade || {};
-      return (d.tasksCompleted || 0) * 2 + (p.rapida || 0) * 3;
-    },
-  },
-  {
-    id: "constancia", nome: "Constância", emoji: "🔥", cor: "#c94f5e",
-    desc: "Voltar, dia após dia",
-    pontos: (d) => ((d.daysActive || []).length) * 6 + (d.longestStreak || 0) * 10,
-  },
-];
-const ATRIBUTO_NIVEL_MAX = 10;
-const ATRIBUTO_BASE = 25; // pontos do nível 1; a curva é quadrática
-
-/** Nível 0–10 a partir dos pontos, com o progresso até o próximo. */
-function nivelAtributo(pontos) {
-  const p = Math.max(0, pontos || 0);
-  const nivel = Math.min(ATRIBUTO_NIVEL_MAX, Math.floor(Math.sqrt(p / ATRIBUTO_BASE)));
-  const pontosDoNivel = ATRIBUTO_BASE * nivel * nivel;
-  const pontosDoProximo = ATRIBUTO_BASE * (nivel + 1) * (nivel + 1);
-  const noMax = nivel >= ATRIBUTO_NIVEL_MAX;
-  const pct = noMax ? 100 : Math.round(((p - pontosDoNivel) / (pontosDoProximo - pontosDoNivel)) * 100);
-  return { nivel, pontos: p, pct: Math.max(0, Math.min(100, pct)), faltam: noMax ? 0 : pontosDoProximo - p, noMax };
-}
-/** A ficha completa, sempre derivada do save — nunca guardada, nunca desatualiza. */
-function calcAtributos(data) {
-  return ATRIBUTOS.map((a) => ({ ...a, ...nivelAtributo(a.pontos(data || {})) }));
-}
 
 /* ---------- Pular sem culpa: o Mestre nunca cobra ---------- */
 const SKIP_MSGS = [
@@ -577,13 +523,6 @@ const FUN_MSGS = {
   ],
 };
 
-/* ---------- Curva de XP ---------- */
-const xpToNext = (level) => Math.floor(100 + (level - 1) * 60 + Math.pow(level - 1, 2) * 10);
-function levelFromXp(xpTotal) {
-  let level = 1, rem = xpTotal;
-  while (rem >= xpToNext(level)) { rem -= xpToNext(level); level++; }
-  return { level, xpInLevel: rem, xpForNext: xpToNext(level) };
-}
 
 /* ---------- Datas ---------- */
 const dayKey = (d = new Date()) => {

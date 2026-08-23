@@ -578,6 +578,19 @@ trabalho conhecido. Se não funcionar, nada do 3D salva.
 
 ---
 
+## 12.1 Decisões tomadas (23/08/2026)
+
+| Decisão | Resultado |
+|---|---|
+| **O mundo nunca regride** | ✅ **Confirmado como diretriz oficial.** Registrado no `DECISOES-DE-PRODUTO.md` como extensão do "pular sem culpa". *"Seu mundo espera por você. Ele não cobra sua ausência."* |
+| **World 0 sem 3D** | ✅ Confirmado. Portal, QR, código numérico, confirmação no celular, token temporário, `/api/world/snapshot` e a rota `/world` com os dados em texto |
+| **World 0 antes da 5B** | ✅ Confirmado — para os atributos nascerem sabendo que existe a camada World |
+| **World não acessa o Supabase direto** | ✅ Confirmado. `Mobile / World → API → Supabase` |
+| **Snapshot versionado como contrato** | ✅ Confirmado. Contrato estável entre o QuesTAH atual e o World; o JSONB bruto do save nunca viaja |
+| **Somente-leitura no World 0** | ✅ Confirmado |
+| **Usuário anônimo** | ✅ Funciona igual a quem tem e-mail |
+| **Atributos moldam o mundo** | 🔬 Registrado como **hipótese de produto** para a 5B — não é decisão de design |
+
 ## 13. Decisões que ainda dependem de você
 
 1. **O mundo nunca regride** (seção 9.1) — confirma essa regra? É a mais importante do estudo.

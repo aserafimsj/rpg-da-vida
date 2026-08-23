@@ -22,6 +22,28 @@ Consequências práticas que valem como regra:
 
 ---
 
+## Diretriz: o mundo nunca regride
+
+> **Seu mundo espera por você. Ele não cobra sua ausência.**
+
+Extensão direta do "pular sem culpa" da Fase 2, agora aplicada à paisagem. Se o mundo cresce
+com o progresso, ele **não pode** encolher com a ausência — isso seria a punição mais
+eficiente já criada no produto, contra a diretriz mais forte dele, e para o público em que a
+culpa é mais tóxica.
+
+Se o jogador ficar dias ou semanas fora:
+
+- ❌ o progresso **não** é perdido
+- ❌ construções **não** desaparecem
+- ❌ regiões **não** ficam destruídas
+- ❌ **não** existe degradação
+- ❌ **não** existe punição visual
+- ❌ **não** existe a sensação de "você abandonou seu mundo"
+
+A ausência pode, no futuro, ser representada por estados **neutros ou atmosféricos** —
+noite, menos movimento, clima diferente, silêncio. **Nunca destruição ou perda.** E voltar
+acende tudo de novo, com boas-vindas em vez de cobrança.
+
 ## Diretriz de arquitetura: as quatro camadas
 
 Esta separação vale como diretriz para todas as fases seguintes.
@@ -59,6 +81,31 @@ Possibilidades a avaliar na Fase 5 (nenhuma decidida, nenhuma implementada):
 - eventos ou conteúdos desbloqueados
 
 **Não decidir nem implementar nada disso antes da Fase 5.**
+
+### Hipótese de produto para a 5B (registrada, não decidida)
+
+Surgiu do estudo do QuesTAH World uma resposta que não estava na lista acima:
+
+> **Os atributos moldam o mundo, não o personagem.**
+
+- **Classe** → a identidade escolhida pelo jogador (⚔️ Guerreiro)
+- **Atributos** → os padrões desenvolvidos pelo comportamento (🎯 Foco, 🛡️ Disciplina, ⚡ Energia, 🔥 Constância)
+- **Mundo** → a manifestação visual desses atributos
+
+Manifestações imaginadas — **hipótese, não design final**:
+
+| Atributo | Possível manifestação |
+|---|---|
+| 🎯 Foco | clareza, iluminação, pontos de interesse mais definidos |
+| 🔥 Constância | vegetação, crescimento, florescimento, continuidade |
+| 🛡️ Disciplina | construções, organização, estruturas bem cuidadas |
+| ⚡ Energia | movimento, NPCs, atividade, partículas, vida |
+
+Resolve a tensão de forma elegante: a classe continua sendo **quem você é**, os atributos
+viram **como o seu mundo se parece**. Um não pisa no outro.
+
+**A investigar na 5B.** Por isso o World 0 vem antes: para a 5B nascer sabendo que existe
+uma camada World onde os atributos podem se manifestar.
 
 ---
 
@@ -161,7 +208,9 @@ Possibilidades a avaliar na Fase 5 (nenhuma decidida, nenhuma implementada):
 | **4A** | **Micro-etapas** — quebrar missão grande em partes, cada etapa com XP próprio **+ bônus ao concluir a missão** | ✅ no ar |
 | **4B** | **Atributos** — Foco, Disciplina, Energia e Constância | ✅ no ar |
 | **5A** | **Criação do Herói** — onboarding, escolha de classe, meta de sequência e montagem do mundo | ✅ no ar |
-| **5B** | **Efeito dos atributos** — fazer Foco/Disciplina/Energia/Constância influenciarem a experiência **sem substituir a classe escolhida** (requisito registrado acima) | Próxima, com investigação própria |
+| **World 0** | **Portal e fundação do QuesTAH World** — pareamento por QR, código de segurança, token temporário, snapshot versionado e a rota `/world`. **Sem 3D.** | ✅ no ar |
+| **5B** | **Efeito dos atributos** — fazer Foco/Disciplina/Energia/Constância influenciarem a experiência **sem substituir a classe escolhida**. Hipótese principal: os atributos moldam o mundo | Próxima, com investigação própria |
+| **World 1+** | Cena 3D, regiões, progressão visual, pet, exploração | Depois (veja `ARQUITETURA-QUESTAH-WORLD.md`) |
 
 ---
 
