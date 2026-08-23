@@ -127,6 +127,24 @@ Possibilidades a avaliar na Fase 5 (nenhuma decidida, nenhuma implementada):
 - A **classe continua** sendo "Guardião de {categoria favorita}" até a Criação do Herói.
 - Sem migração de banco: os sinais vivem no save.
 
+### Fase 5A — Criação do Herói ✅ no ar
+
+- **Onboarding pulável**, com um mundo pronto de reserva: quem não tem paciência para
+  formulário começa a jogar na hora e configura depois.
+- 7 passos: nome · classe · áreas da vida · missões iniciais · meta de sequência · glicemia · resumo.
+- **A classe é escolhida**, entre 8 arquétipos de postura (Guardião, Mago, Domador…) — sem
+  amarração com categorias. Sem classe escolhida, o app segue mostrando a categoria favorita.
+- **Meta de sequência** do usuário (3/7/15/30 dias). Aparece como progresso no fogo e vira
+  troféu quando batida — nunca cobrança.
+- **Só a glicose virou opcional.** Remédios, água e refeições seguem para todo mundo. Para quem
+  já jogava, a glicose continua ligada.
+- **Quem já joga nunca é levado ao onboarding.** Recebe um convite discreto nos ajustes para
+  escolher classe, meta e ligar/desligar a glicose — sem tocar em categorias, missões ou progresso.
+- **Erro de rede jamais é confundido com usuário novo**: o onboarding só aparece quando a
+  consulta ao save funcionou e não havia nada. É a trava que impede sobrescrever o jogo de alguém.
+- O perfil vive no save (`data.perfil`), não em tabela: é configuração, não dado relacional —
+  e evita mais uma ida ao SQL. Pode virar tabela no futuro sem prejuízo.
+
 ### Limpeza (16/08/2026)
 
 - **Modo Game Boy removido.** Duplicava a renderização das missões e dobrava o trabalho de cada
@@ -142,7 +160,8 @@ Possibilidades a avaliar na Fase 5 (nenhuma decidida, nenhuma implementada):
 |---|---|---|
 | **4A** | **Micro-etapas** — quebrar missão grande em partes, cada etapa com XP próprio **+ bônus ao concluir a missão** | ✅ no ar |
 | **4B** | **Atributos** — Foco, Disciplina, Energia e Constância | ✅ no ar |
-| **5** | **Criação do Herói** — onboarding, personalização inicial, escolha de classe e montagem do mundo em torno da vida do jogador | Próxima |
+| **5A** | **Criação do Herói** — onboarding, escolha de classe, meta de sequência e montagem do mundo | ✅ no ar |
+| **5B** | **Efeito dos atributos** — fazer Foco/Disciplina/Energia/Constância influenciarem a experiência **sem substituir a classe escolhida** (requisito registrado acima) | Próxima, com investigação própria |
 
 ---
 
