@@ -37,6 +37,14 @@ com instruções literais de copiar-e-colar, na ordem exata.
 3. **Categorias** — as áreas da vida do jogador.
 4. **Missões** — as ações concretas do dia.
 
+## Endereços que importam
+
+- **O app em produção é `https://rpg-da-vida-nine.vercel.app`.** Com o `-nine`.
+  `rpg-da-vida.vercel.app` (sem o sufixo) é de **outra pessoa** — nunca mandar o Adilson
+  para lá. Já custou uma sessão inteira de diagnóstico de um "404" que não existia.
+- O QR do World monta a URL sozinho (`window.location.origin`), então ele nunca erra:
+  o endereço só precisa estar certo nos **documentos**.
+
 ## Armadilhas deste código (já quebraram produção)
 
 - **`Map` neste projeto é o ícone do `lucide-react`**, importado no topo de
