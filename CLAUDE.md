@@ -55,6 +55,11 @@ com instruções literais de copiar-e-colar, na ordem exata.
   vezes (polling) precisa de `cache: "no-store"`, senão recebe a primeira resposta para sempre.
 - **`NEXT_PUBLIC_*` é congelado no momento do build**, não lido em tempo de execução.
   Mudou a variável na Vercel? Precisa publicar de novo.
+- **O mundo 3D não pode encostar na rota `/`.** O `three` só entra por import dinâmico com
+  `{ ssr: false }`, a partir de `src/components/world/`. `npm run peso` (depois do build) é o
+  alarme — um import estático faria o celular pular de 193 KB para 359 KB **sem quebrar o build**.
+- **`<Environment preset>` e `<Text>` do `drei` baixam arquivo de servidor de terceiro.**
+  Funcionam no teste e falham na vida real. Luz é `directionalLight`; texto é HTML fora do Canvas.
 
 ## Antes de implementar algo grande
 

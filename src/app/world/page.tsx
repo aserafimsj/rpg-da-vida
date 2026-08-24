@@ -2,14 +2,18 @@
 "use client";
 import React, { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
+import Palco from "@/components/world/Palco";
 
 /* ============================================================
-   QUESTAH WORLD — World 0
+   QUESTAH WORLD — World 0 (portal) + World 1 (primeira cena)
 
-   O portal e a prova de que o progresso do celular existe deste
-   lado. Sem 3D nenhum de propósito: o World 0 valida a fundação
-   (pareamento seguro + contrato de dados) antes de qualquer
-   camada gráfica entrar em cima.
+   O World 0 provou a fundação: o pareamento seguro e o contrato
+   de dados. O World 1 põe a primeira imagem em cima dela — chão,
+   céu, luz, câmera orbital e o herói em blocos.
+
+   Os dados em texto CONTINUAM abaixo da cena, de propósito: eles
+   são a prova de que o número que chega é o número certo, e não
+   se joga fora uma prova que funciona só porque agora tem gráfico.
    ============================================================ */
 
 const C = {
@@ -159,6 +163,13 @@ export default function WorldPage() {
         <div className="mt-6 w-full max-w-3xl">
           <p style={{ color: C.xp }} className="text-center font-serif text-xl font-black">✨ Portal aberto</p>
 
+          <Palco
+            classeId={snapshot.personagem.classe?.id || null}
+            nome={snapshot.personagem.nome}
+            classeNome={snapshot.personagem.classe?.nome || null}
+            classeEmoji={snapshot.personagem.classe?.emoji || ""}
+          />
+
           <Bloco titulo="Personagem">
             <Linha rotulo="Nome" valor={snapshot.personagem.nome} />
             <Linha rotulo="Classe" valor={snapshot.personagem.classe
@@ -218,7 +229,7 @@ export default function WorldPage() {
           </Bloco>
 
           <p style={{ color: C.parch2 }} className="mt-6 text-center text-xs">
-            World 0 — a fundação. O mundo 3D entra a partir do World 1.<br />
+            World 1 — a primeira cena. As regiões ganham forma a partir do World 2.<br />
             Contrato {snapshot.contrato} · gerado em {new Date(snapshot.geradoEm).toLocaleString("pt-BR")}
           </p>
 

@@ -549,8 +549,8 @@ Cada etapa entrega algo verificável sozinho.
 
 | Etapa | Objetivo | Pronto quando | 3D? |
 |---|---|---|---|
-| **World 0** | **Portal e pareamento** — QR, número de segurança, confirmação no celular, token, `/api/world/snapshot`, e a rota `/world` mostrando o snapshot **como texto** | O PC entra pelo celular e vê nome, nível, classe, regiões e pet — sem uma linha de 3D | ❌ |
-| **World 1** | **Primeira cena** — chão, céu, luz, câmera orbital, um avatar em bloco | Dá para girar a câmera em volta do personagem a 60 fps | ✅ |
+| **World 0** ✅ | **Portal e pareamento** — QR, número de segurança, confirmação no celular, token, `/api/world/snapshot`, e a rota `/world` mostrando o snapshot **como texto** | O PC entra pelo celular e vê nome, nível, classe, regiões e pet — sem uma linha de 3D | ❌ |
+| **World 1** ✅ | **Primeira cena** — chão, céu, luz, câmera orbital, um avatar em bloco | Dá para girar a câmera em volta do personagem a 60 fps | ✅ |
 | **World 2** | **Uma região** — a categoria mais usada vira lugar, com desenvolvimento visível | Quem tem 200 conclusões em "Casa" vê uma vila maior que quem tem 3 | ✅ |
 | **World 3** | **Todas as regiões** — arquétipos, fallback genérico, escolha manual | Dois usuários com vidas diferentes têm mundos diferentes | ✅ |
 | **World 4** | **Progressão visual** — o mundo muda com XP, sequência e atributos | Concluir missões no celular muda a paisagem no PC | ✅ |
@@ -560,6 +560,47 @@ Cada etapa entrega algo verificável sozinho.
 **World 0 é o passo mais importante e não tem 3D nenhum.** Ele prova a parte difícil — a
 ponte segura entre os dois aparelhos e o contrato de dados. Se World 0 funcionar, o resto é
 trabalho conhecido. Se não funcionar, nada do 3D salva.
+
+---
+
+## 11.1 World 1 — o que foi construído (24/08/2026)
+
+`React Three Fiber`, como recomendado na §8.2. Arquivos novos:
+
+| Arquivo | Papel |
+|---|---|
+| `src/components/world/Cena.tsx` | A cena: chão, céu, sol, herói em blocos, câmera orbital |
+| `src/components/world/Palco.tsx` | Decide **se** o 3D entra (checa WebGL) e o carrega sob demanda |
+| `src/lib/worldVisual.ts` | A camada de interpretação da §7.1 — classe vira cor **aqui**, não no save |
+| `scripts/peso-mobile.js` | O alarme de peso pedido na §8.2 (`npm run peso`) |
+
+**Nenhuma migração de banco.** O World 1 desenha o que o snapshot do World 0 já entregava.
+
+### Três decisões técnicas que valem registro
+
+1. **`<Environment preset>` e `<Text>` do drei estão proibidos.** Ambos **baixam arquivos de
+   servidores de terceiros** (HDRI e fonte). O mundo passaria a depender de uma CDN alheia para
+   acender a luz e escrever um nome. Usamos luzes de verdade, e todo texto é HTML fora do
+   Canvas.
+2. **`ContactShadows` com `frames={1}`.** Estava redesenhando a cada quadro **por cima** da
+   sombra real do sol — duas sombras pelo preço de duas. Congelar a de contato tirou 12% do
+   tempo de quadro sem mudar a imagem.
+3. **O texto do World 0 continua abaixo da cena.** É a prova de que o número que chega é o
+   número certo. Não se joga fora uma prova que funciona porque agora existe gráfico.
+
+### O que ficou medido
+
+| Medida | Resultado |
+|---|---|
+| Custo para o **celular** | **208 bytes** (0,1%) — o motor 3D sai num pedaço separado que só o PC baixa |
+| Peso do 3D | ~165 KB comprimidos, sob demanda, só na `/world` |
+| Sem WebGL | A cena some, o aviso aparece, **os dados continuam** |
+| Alarme de peso | Testado com sabotagem proposital: pegou o vazamento e mostrou o estrago (193 KB → 359 KB) |
+
+> **Os 60 fps não foram provados.** O ambiente de teste não tem placa de vídeo (SwiftShader,
+> renderização por software) e deu 16 fps — número que não diz nada sobre uma máquina real. A
+> cena tem 7 blocos e um mapa de sombra; a expectativa é folgada, mas **é expectativa**. Só o
+> PC do jogador confirma.
 
 ---
 
