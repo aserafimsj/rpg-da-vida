@@ -6,15 +6,19 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "peso": "node scripts/peso-mobile.js"
   },
   "dependencies": {
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.18.0",
     "@supabase/supabase-js": "^2.45.4",
     "lucide-react": "^0.383.0",
     "next": "14.2.5",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "three": "^0.169.0",
     "web-push": "^3.6.7"
   },
   "devDependencies": {

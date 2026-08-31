@@ -37,11 +37,15 @@ Eu mesclo e a Vercel publica. Espere ficar verde.
 
 ### No computador
 
-Abra o endereço do seu app com **`/world`** no final. Exemplo:
+Abra o endereço do seu app com **`/world`** no final:
 
 ```
-https://rpg-da-vida.vercel.app/world
+https://rpg-da-vida-nine.vercel.app/world
 ```
+
+> ⚠️ Repare no **`-nine`**. Sem ele o endereço é de **outra pessoa**, e aparece um
+> "404: NOT_FOUND" (ou um site desconhecido). O endereço do QuesTAH é sempre o que
+> está escrito acima.
 
 Vai aparecer:
 

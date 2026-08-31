@@ -25,7 +25,7 @@ Transforme rotina, hábitos e cuidados de saúde num RPG: XP, níveis, ouro, rec
 ### 4. Configure o login por e-mail
 1. Vá em **Authentication** → **Providers** → **Email** e deixe **Email** ativado (o "magic link" já vem ligado).
 2. Vá em **Authentication** → **URL Configuration** e preencha:
-   - **Site URL**: durante os testes, `http://localhost:3000`. Depois do deploy, troque para a URL da Vercel (ex.: `https://rpg-da-vida.vercel.app`).
+   - **Site URL**: durante os testes, `http://localhost:3000`. Depois do deploy, troque para a URL da Vercel — que neste projeto é `https://rpg-da-vida-nine.vercel.app` (com o `-nine`; sem ele o endereço é de outra pessoa).
    - **Redirect URLs**: adicione as duas — `http://localhost:3000` e a URL da Vercel.
 
 ### 5. Rode no seu computador (opcional, para testar)
