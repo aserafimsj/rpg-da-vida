@@ -597,10 +597,53 @@ trabalho conhecido. Se não funcionar, nada do 3D salva.
 | Sem WebGL | A cena some, o aviso aparece, **os dados continuam** |
 | Alarme de peso | Testado com sabotagem proposital: pegou o vazamento e mostrou o estrago (193 KB → 359 KB) |
 
-> **Os 60 fps não foram provados.** O ambiente de teste não tem placa de vídeo (SwiftShader,
-> renderização por software) e deu 16 fps — número que não diz nada sobre uma máquina real. A
-> cena tem 7 blocos e um mapa de sombra; a expectativa é folgada, mas **é expectativa**. Só o
-> PC do jogador confirma.
+> **Fluidez confirmada em máquina real (24/08/2026).** O ambiente de teste não tem placa de
+> vídeo e dava 16 fps por renderização em software — número que não dizia nada. No PC do
+> Adilson: câmera, zoom e iluminação respondendo sem travar. A pendência está fechada.
+
+### World 1.1 — o herói anda (24/08/2026)
+
+Pedido do dono do produto: *"o que ele não faz é se mexer. Ele fica parado o tempo todo, mas
+quero que ele ande, pule, se mexa."* Escolhido controle **pelo teclado**, não vida própria.
+
+- **W-A-S-D ou setas** andam, **espaço** pula. A direção é relativa à câmera — "para frente" é
+  para longe de quem olha, que é o que a mão espera.
+- O herói **vira** para onde anda, e pernas e braços balançam com a velocidade.
+- A borda do mundo (raio 12,5 m) **segura** sem deixar cair; o disco do chão vai até 14 m, então
+  dá para ver o fim do mundo antes de esbarrar nele.
+
+**O teclado só comanda com o mouse em cima da cena.** Sem essa condição, as setas e o espaço
+parariam de rolar a página — e os dados em texto, que ficam logo abaixo, virariam um inferno de
+ler. A regra fica óbvia sem precisar de aviso: mouse na cena, você joga; mouse fora, é uma
+página.
+
+#### Duas coisas que o teste pegou
+
+1. **O herói encolhia até virar um pontinho.** A `OrbitControls` recalcula o deslocamento entre
+   câmera e alvo a cada `update()`. Movendo só o alvo, o deslocamento cresce sozinho a cada
+   quadro. A câmera precisa andar o **mesmo tanto** que o alvo. Confirmado por medição: o herói
+   ocupa 14.958 px antes de andar e 15.045 px depois (1,01×).
+2. **Andar era invisível.** Como a câmera acompanha o herói e o chão era verde liso, apertar W
+   dava exatamente a mesma imagem de ficar parado. Entraram ~90 moitas e pedras (cones e
+   dodecaedros, sorteio de **semente fixa** — o capim nasce no mesmo lugar toda vez, porque o
+   mundo também não pode se reembaralhar entre visitas). Não é arte: é o que faz o movimento
+   existir aos olhos.
+
+#### Como foi verificado
+
+Sem código de depuração no produto: o R3F não expõe a cena no build de produção, então o teste
+**decodifica os quadros** e compara. Primeiro mede o ruído de fundo (a respiração do herói,
+~1,2% dos pixels) e usa isso como régua para todo o resto.
+
+| Verificação | Resultado |
+|---|---|
+| Mouse fora da cena → teclado não comanda | 1,25% (= ruído) ✅ |
+| W anda | 26,9% dos pixels mudam ✅ |
+| D anda para o lado | 22,6% ✅ |
+| Espaço pula e volta ao chão | 6,6% no ar · 0,7% depois de pousar ✅ |
+| 14 s andando contra a borda | herói visível, **92.869 px de chão** sob ele contra 15 de céu ✅ |
+| Perder o foco da janela | não sai andando sozinho ✅ |
+| A câmera acompanha | 1,01× do tamanho ✅ |
 
 ---
 

@@ -15,6 +15,16 @@ import dynamic from "next/dynamic";
  */
 const Cena = dynamic(() => import("./Cena"), { ssr: false });
 
+/** Teclinha do rodapé — só enfeite, para a dica ser lida sem esforço. */
+function Tecla({ children }) {
+  return (
+    <kbd style={{ background: "rgba(244,230,197,.14)", border: "1px solid rgba(244,230,197,.3)", color: "#f4e6c5" }}
+      className="mx-[1px] inline-block rounded px-1.5 py-0.5 font-sans text-[10px] font-bold leading-none">
+      {children}
+    </kbd>
+  );
+}
+
 /** Testa WebGL sem depender do three: um canvas descartável e pronto. */
 function temWebGL() {
   try {
@@ -64,7 +74,15 @@ export default function Palco({ classeId, nome, classeNome, classeEmoji }) {
         <div style={{ color: "#f4e6c5" }} className="font-serif text-lg font-black">{nome}</div>
         <div style={{ color: "#ead2a0" }} className="text-xs">
           {classeNome ? `${classeEmoji} ${classeNome}` : "herói sem classe definida"}
-          {" · "}arraste para girar, role para aproximar
+        </div>
+        <div style={{ color: "#ead2a0" }} className="mt-2 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs opacity-80">
+          <span><Tecla>W</Tecla><Tecla>A</Tecla><Tecla>S</Tecla><Tecla>D</Tecla> ou <Tecla>←</Tecla><Tecla>↑</Tecla><Tecla>↓</Tecla><Tecla>→</Tecla> andar</span>
+          <span><Tecla>espaço</Tecla> pular</span>
+          <span>arrastar com o mouse: girar</span>
+          <span>rodinha: aproximar</span>
+        </div>
+        <div style={{ color: "#ead2a0" }} className="mt-1 text-[11px] opacity-55">
+          o teclado só comanda o herói com o mouse em cima da cena
         </div>
       </div>
     </div>
