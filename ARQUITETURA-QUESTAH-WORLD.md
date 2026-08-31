@@ -551,7 +551,7 @@ Cada etapa entrega algo verificável sozinho.
 |---|---|---|---|
 | **World 0** ✅ | **Portal e pareamento** — QR, número de segurança, confirmação no celular, token, `/api/world/snapshot`, e a rota `/world` mostrando o snapshot **como texto** | O PC entra pelo celular e vê nome, nível, classe, regiões e pet — sem uma linha de 3D | ❌ |
 | **World 1** ✅ | **Primeira cena** — chão, céu, luz, câmera orbital, um avatar em bloco | Dá para girar a câmera em volta do personagem a 60 fps | ✅ |
-| **World 2** | **Uma região** — a categoria mais usada vira lugar, com desenvolvimento visível | Quem tem 200 conclusões em "Casa" vê uma vila maior que quem tem 3 | ✅ |
+| **World 2** ✅ | **Uma região** — a categoria mais usada vira lugar, com desenvolvimento visível | Quem tem 200 conclusões em "Casa" vê uma vila maior que quem tem 3 | ✅ |
 | **World 3** | **Todas as regiões** — arquétipos, fallback genérico, escolha manual | Dois usuários com vidas diferentes têm mundos diferentes | ✅ |
 | **World 4** | **Progressão visual** — o mundo muda com XP, sequência e atributos | Concluir missões no celular muda a paisagem no PC | ✅ |
 | **World 5** | **Pet e vida** — o monstrinho no mundo, dia/noite, atualização quase ao vivo (SSE) | O pet acompanha o personagem; o mundo se atualiza sozinho | ✅ |
@@ -644,6 +644,49 @@ Sem código de depuração no produto: o R3F não expõe a cena no build de prod
 | 14 s andando contra a borda | herói visível, **92.869 px de chão** sob ele contra 15 de céu ✅ |
 | Perder o foco da janela | não sai andando sozinho ✅ |
 | A câmera acompanha | 1,01× do tamanho ✅ |
+
+---
+
+### World 2 — a categoria virou lugar (24/08/2026)
+
+A região com **mais conclusões** deixa de ser barrinha e vira um lugar no mundo. Arquivos
+novos: `src/lib/worldRegioes.ts` (os arquétipos) e `src/components/world/Regiao.tsx` (a
+montagem).
+
+O componente `Regiao` **não sabe** o que é "Trabalho" ou "Casa": recebe um arquétipo e um
+tamanho, e monta. É por isso que o World 3 vira um laço em volta dele, e não dez componentes
+novos. Um arquétipo novo é **uma linha** na tabela `ARQUETIPOS` — não é código de desenho novo.
+
+O layout é calculado UMA vez e serve a duas coisas: o que se vê e o que se esbarra. Se fossem
+dois cálculos, um dia divergiriam e o jogador atravessaria uma parede que está ali na tela.
+
+#### Três coisas que o teste pegou
+
+1. **O herói nascia dentro da vila.** Com o mundo de raio 12,5 e a região a 6,8 m, a câmera
+   ficava entalada entre as casas. O mundo foi para raio 24 e a região para 13 m do ponto de
+   partida: agora ela é um lugar que se **avista** e para onde se **caminha**.
+2. **A cor da categoria virava um lago.** Usar a cor pura como chão fazia um "Casa" azul
+   parecer água no meio do campo. Agora o gramado é **tingido** com ela (42%): continua sendo
+   chão, e ainda assim é reconhecidamente dele.
+3. **A placa era cortada** pelo topo da cena justamente quando você avista a região de longe —
+   que é quando ela mais importa.
+
+#### Como foi verificado
+
+| Verificação | Resultado |
+|---|---|
+| O critério do roadmap: 200 conclusões > 3 | **1,94× de chão · 7,53× de construção** ✅ |
+| Escolhe a região de maior conclusão entre várias | ✅ |
+| Jogador **sem nenhuma região** | mundo abre normal, herói lá, nada quebra ✅ |
+| Construções sólidas | o herói não some dentro de uma casa ✅ |
+| Inferência de arquétipo | 15 casos, com acento, caixa alta e entrada nula ✅ |
+| Regressão do movimento (World 1.1) | 9 verificações, todas passando ✅ |
+
+> **Um detalhe do método:** os detectores de cor do teste estavam errados — o de "parede"
+> contava o **céu** e o de "herói" contava **telhado**, e por isso um teste chegou a acusar que
+> a vila grande tinha menos construção que a pequena. Foram refeitos a partir das cores
+> **medidas** na imagem, não chutadas. Vale o registro: um teste com detector errado é pior que
+> teste nenhum, porque mente com autoridade.
 
 ---
 

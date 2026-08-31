@@ -35,7 +35,7 @@ function temWebGL() {
   }
 }
 
-export default function Palco({ classeId, nome, classeNome, classeEmoji }) {
+export default function Palco({ classeId, nome, classeNome, classeEmoji, regioes }) {
   const [estado, setEstado] = useState("checando"); // checando | pronto | semWebGL
 
   useEffect(() => {
@@ -61,7 +61,7 @@ export default function Palco({ classeId, nome, classeNome, classeEmoji }) {
       className="mt-5 overflow-hidden rounded-2xl">
       <div style={{ height: 460 }}>
         {estado === "pronto"
-          ? <Cena classeId={classeId} altura={460} />
+          ? <Cena classeId={classeId} regioes={regioes} altura={460} />
           : <div className="flex h-full items-center justify-center">
               <span style={{ color: "#ead2a0" }} className="animate-pulse font-serif">
                 ✨ desenhando o seu mundo…

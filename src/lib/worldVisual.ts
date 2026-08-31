@@ -44,3 +44,28 @@ const VISUAL_PADRAO = { cor: CORES.ouro, detalhe: CORES.ouroFundo };
 export function visualDaClasse(classeId) {
   return VISUAL_CLASSE[classeId] || VISUAL_PADRAO;
 }
+
+/* ---------- utilidades de cor ---------- */
+
+function paraRgb(hex) {
+  const h = String(hex || "").replace("#", "");
+  const c = h.length === 3 ? h.split("").map((x) => x + x).join("") : h;
+  const n = parseInt(c, 16);
+  return Number.isFinite(n) && c.length === 6
+    ? { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
+    : { r: 200, g: 200, b: 200 };
+}
+
+/**
+ * Mistura duas cores. `t = 0` devolve a primeira, `t = 1` a segunda.
+ *
+ * Serve para as paredes das construções: elas nascem da cor que o jogador
+ * escolheu para a categoria, clareada até virar parede. Assim a região é
+ * reconhecidamente dele sem que tudo fique de uma cor chapada só.
+ */
+export function misturar(hexA, hexB, t) {
+  const a = paraRgb(hexA), b = paraRgb(hexB);
+  const k = Math.max(0, Math.min(1, t));
+  const v = (x, y) => Math.round(x + (y - x) * k).toString(16).padStart(2, "0");
+  return `#${v(a.r, b.r)}${v(a.g, b.g)}${v(a.b, b.b)}`;
+}

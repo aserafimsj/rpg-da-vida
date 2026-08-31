@@ -3,7 +3,9 @@
 import React, { useRef, useMemo, useEffect } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, Sky, ContactShadows } from "@react-three/drei";
-import { visualDaClasse, CORES } from "@/lib/worldVisual";
+import { visualDaClasse, CORES, misturar } from "@/lib/worldVisual";
+import { ARQUETIPOS, arquetipoDe, tamanhoDaRegiao, sorteioDe, sementeDoId } from "@/lib/worldRegioes";
+import Regiao from "./Regiao";
 
 /* ============================================================
    QUESTAH WORLD — World 1: a primeira cena
@@ -22,7 +24,10 @@ import { visualDaClasse, CORES } from "@/lib/worldVisual";
    Ambas funcionariam no meu teste e falhariam na vida real.
    ============================================================ */
 
-const RAIO_DO_MUNDO = 12.5;   // até onde dá para andar
+// O mundo precisa ser maior do que a maior região, com folga para caminhar
+// ATÉ ela. Com 12,5 o herói nascia dentro da vila e a câmera ficava entalada
+// entre as casas.
+const RAIO_DO_MUNDO = 24;      // até onde dá para andar
 const VELOCIDADE = 3.4;        // metros por segundo
 const FORCA_DO_PULO = 5.0;
 const GRAVIDADE = 14;
@@ -151,7 +156,7 @@ function CorpoDeBlocos({ cor, detalhe, balanco }) {
 
 /* ---------- o herói: movimento --------------------------------------- */
 
-function Heroi({ classeId, ativo, corpoRef }) {
+function Heroi({ classeId, ativo, corpoRef, obstaculos }) {
   const grupo = useRef();
   const { cor, detalhe } = useMemo(() => visualDaClasse(classeId), [classeId]);
   const teclado = useTeclado(ativo);
@@ -203,6 +208,27 @@ function Heroi({ classeId, ativo, corpoRef }) {
     if (r > RAIO_DO_MUNDO) {
       g.position.x = (g.position.x / r) * RAIO_DO_MUNDO;
       g.position.z = (g.position.z / r) * RAIO_DO_MUNDO;
+    }
+
+    // ---- as construções são sólidas ----
+    // Empurra o herói para fora de qualquer prédio em que ele tenha entrado.
+    // Simples de propósito: círculo contra círculo. Ele desliza pela parede em
+    // vez de grudar nela, que é o que a mão espera.
+    if (obstaculos && obstaculos.length) {
+      for (let i = 0; i < obstaculos.length; i++) {
+        const o = obstaculos[i];
+        const dx = g.position.x - o.x, dz = g.position.z - o.z;
+        const d = Math.hypot(dx, dz);
+        const minimo = o.r + 0.4;   // 0,4 = a "gordura" do herói
+        if (d < minimo) {
+          if (d < 0.0001) {         // exatamente no centro: escolhe um lado
+            g.position.x = o.x + minimo;
+          } else {
+            g.position.x = o.x + (dx / d) * minimo;
+            g.position.z = o.z + (dz / d) * minimo;
+          }
+        }
+      }
     }
 
     // ---- virar para onde anda ----
@@ -293,11 +319,82 @@ function Chao() {
  * regride" também quer dizer que ele não vira outro mundo enquanto você
  * pisca.
  */
-function sorteio(semente) {
-  let s = semente;
-  return () => {
-    s = (s * 1664525 + 1013904223) % 4294967296;
-    return s / 4294967296;
+/* ------------------------------------------------------------------ *
+ *  Montagem da região (World 2)
+ *
+ *  Onde os números do snapshot viram um lugar. Fica FORA do desenho de
+ *  propósito: o layout é calculado UMA vez e serve a duas coisas — o que se
+ *  vê (o componente Regiao) e o que se esbarra (a colisão do herói). Se
+ *  fossem dois cálculos, um dia divergiriam e o jogador atravessaria uma
+ *  parede que está bem ali na tela.
+ * ------------------------------------------------------------------ */
+
+/** World 2 mostra UMA região: aquela em que você mais concluiu. */
+export function regiaoPrincipal(regioes) {
+  if (!Array.isArray(regioes) || !regioes.length) return null;
+  return [...regioes].sort(
+    (a, b) => (b.conclusoes || 0) - (a.conclusoes || 0) ||
+              String(a.id).localeCompare(String(b.id))
+  )[0];
+}
+
+// Longe o bastante para o herói nascer FORA dela e ver o lugar à sua frente —
+// a câmera olha justamente nessa direção quando o mundo abre.
+const CENTRO_DA_REGIAO = { x: -9.2, z: -9.2 };
+
+export function montarRegiao(regiao) {
+  if (!regiao) return null;
+  const arquetipo = arquetipoDe(regiao);
+  const arq = ARQUETIPOS[arquetipo] || ARQUETIPOS.generico;
+  const t = tamanhoDaRegiao(regiao.desenvolvimento);
+  const r = sorteioDe(sementeDoId(regiao.id));
+  const cor = regiao.cor || "#8a7b5c";
+
+  const construcoes = [];
+  for (let i = 0; i < t.construcoes; i++) {
+    // em volta do centro, nunca EM cima dele: o meio da região fica livre
+    // para dar para entrar e ficar lá dentro
+    const ang = (i / t.construcoes) * Math.PI * 2 + (r() - 0.5) * 0.7;
+    const dist = t.raio * (0.45 + r() * 0.4);
+    const escala = t.altura * (0.85 + r() * 0.3);
+    construcoes.push({
+      chave: "c" + i,
+      x: Math.cos(ang) * dist,
+      z: Math.sin(ang) * dist,
+      giro: r() * Math.PI * 2,
+      escala,
+      corParede: misturar(cor, "#f0e4cc", 0.55 + r() * 0.2),
+      raio: arq.raioColisao * escala,
+    });
+  }
+
+  const adornos = [];
+  for (let i = 0; i < t.adornos; i++) {
+    const ang = r() * Math.PI * 2;
+    const dist = t.raio * (0.15 + Math.sqrt(r()) * 0.8);
+    adornos.push({
+      chave: "a" + i,
+      x: Math.cos(ang) * dist,
+      z: Math.sin(ang) * dist,
+      giro: r() * Math.PI * 2,
+      escala: 0.75 + r() * 0.6,
+    });
+  }
+
+  return {
+    id: regiao.id, nome: regiao.nome, emoji: regiao.emoji, cor, arquetipo,
+    conclusoes: regiao.conclusoes || 0,
+    desenvolvimento: regiao.desenvolvimento || 0,
+    centro: CENTRO_DA_REGIAO,
+    raio: t.raio,
+    construcoes,
+    adornos,
+    // em coordenadas do MUNDO, que é como o herói enxerga
+    obstaculos: construcoes.map((c) => ({
+      x: CENTRO_DA_REGIAO.x + c.x,
+      z: CENTRO_DA_REGIAO.z + c.z,
+      r: c.raio,
+    })),
   };
 }
 
@@ -310,26 +407,27 @@ function sorteio(semente) {
  *
  * Continua sendo "validar com cubos" (§12): são cones e caixas, não é arte.
  */
-function Cenario() {
+function Cenario({ evitar }) {
   const pecas = useMemo(() => {
-    const r = sorteio(20260824);
+    const r = sorteioDe(20260824);
     const lista = [];
-    for (let i = 0; i < 90; i++) {
+    for (let i = 0; i < 150; i++) {
       const ang = r() * Math.PI * 2;
       // raiz quadrada distribui por área, senão tudo se amontoa no meio
-      const dist = 2.5 + Math.sqrt(r()) * (RAIO_DO_MUNDO - 1.5);
+      const dist = 2.5 + Math.sqrt(r()) * (RAIO_DO_MUNDO - 2.0);
       const pedra = r() < 0.28;
+      const x = Math.cos(ang) * dist, z = Math.sin(ang) * dist;
+      // o capim não nasce dentro da região: lá o chão é dela
+      if (evitar && Math.hypot(x - evitar.x, z - evitar.z) < evitar.raio + 0.8) continue;
       lista.push({
-        chave: i,
-        x: Math.cos(ang) * dist,
-        z: Math.sin(ang) * dist,
+        chave: i, x, z,
         giro: r() * Math.PI * 2,
         escala: 0.7 + r() * 0.8,
         pedra,
       });
     }
     return lista;
-  }, []);
+  }, [evitar]);
 
   return (
     <group>
@@ -378,10 +476,18 @@ function SolSegue({ corpoRef }) {
   );
 }
 
-export default function Cena({ classeId = null, altura = 460 }) {
+export default function Cena({ classeId = null, regioes = [], altura = 460 }) {
   const controles = useRef();
   const corpoRef = useRef({ x: 0, y: 0, z: 0 });
   const ativo = useRef(false);
+
+  // O lugar é montado uma vez, a partir do snapshot. Sem regiões (jogador
+  // recém-criado) o mundo continua funcionando — só fica um campo aberto.
+  const layout = useMemo(() => montarRegiao(regiaoPrincipal(regioes)), [regioes]);
+  const evitar = useMemo(
+    () => (layout ? { x: layout.centro.x, z: layout.centro.z, raio: layout.raio } : null),
+    [layout]
+  );
 
   return (
     <div
@@ -409,8 +515,10 @@ export default function Cena({ classeId = null, altura = 460 }) {
         <SolSegue corpoRef={corpoRef} />
 
         <Chao />
-        <Cenario />
-        <Heroi classeId={classeId} ativo={ativo} corpoRef={corpoRef} />
+        <Cenario evitar={evitar} />
+        <Regiao layout={layout} />
+        <Heroi classeId={classeId} ativo={ativo} corpoRef={corpoRef}
+               obstaculos={layout ? layout.obstaculos : null} />
 
         <OrbitControls
           ref={controles}

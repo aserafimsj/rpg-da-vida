@@ -168,6 +168,7 @@ export default function WorldPage() {
             nome={snapshot.personagem.nome}
             classeNome={snapshot.personagem.classe?.nome || null}
             classeEmoji={snapshot.personagem.classe?.emoji || ""}
+            regioes={snapshot.regioes || []}
           />
 
           <Bloco titulo="Personagem">
